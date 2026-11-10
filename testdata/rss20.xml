@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Example project releases</title>
+    <link>https://example.com</link>
+    <description>Fixture used by parser tests</description>
+    <item>
+      <guid>https://example.com/releases/2.4.1</guid>
+      <title>v2.4.1</title>
+      <link>https://example.com/releases/2.4.1</link>
+      <pubDate>Tue, 10 Nov 2026 08:00:00 +0000</pubDate>
+      <description>&lt;p&gt;Bug fixes&lt;/p&gt;</description>
+    </item>
+    <item>
+      <title>v2.4.0</title>
+      <link>https://example.com/releases/2.4.0</link>
+      <pubDate>2026-10-01</pubDate>
+      <description>&lt;p&gt;Initial stable&lt;/p&gt;</description>
+    </item>
+  </channel>
+</rss>

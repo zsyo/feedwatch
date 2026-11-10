@@ -1,0 +1,24 @@
+# Local binaries
+*.exe
+*.test
+dist/
+feedwatch
+
+# Runtime state (contains the seen-ID baseline)
+data/
+*.dryrun.json
+
+# Secrets and per-deployment config (verified domain, recipients, feed list).
+# Only config.example.yaml is versioned; copy it to config.yaml before running.
+.env
+config.yaml
+config.local.yaml
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# WorkBuddy workspace data (agent memory, not application code)
+.workbuddy/

@@ -1,0 +1,10 @@
+{{.Heading}}
+{{.Intro}}
+{{range .Items}}
+- {{.Feed}} | {{.Version}}{{if .IsNew}} (新){{end}} | {{.Date}}
+  {{.URL}}
+{{end}}{{if not .Items}}
+(暂无稳定版本条目)
+{{end}}
+{{.Footer}}
+生成时间：{{.GeneratedAt}} · 共 {{.Count}} 条

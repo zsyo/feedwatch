@@ -1,0 +1,30 @@
+<div style="font-family:system-ui,'Segoe UI',Arial,sans-serif;max-width:760px;color:#1f2328;line-height:1.6">
+  <h2 style="margin:0 0 8px">{{.Heading}}</h2>
+  <p style="margin:0 0 16px;color:#57606a">{{.Intro}}</p>
+  {{if .Items}}
+  <table cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:14px">
+    <thead>
+      <tr style="background:#f6f8fa;text-align:left">
+        <th style="border:1px solid #d0d7de">项目</th>
+        <th style="border:1px solid #d0d7de">版本</th>
+        <th style="border:1px solid #d0d7de">发布时间</th>
+        <th style="border:1px solid #d0d7de">链接</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Items}}
+      <tr>
+        <td style="border:1px solid #d0d7de">{{.Feed}}</td>
+        <td style="border:1px solid #d0d7de">{{.Version}}{{if .IsNew}} <strong style="color:#c0392b">（新）</strong>{{end}}</td>
+        <td style="border:1px solid #d0d7de">{{.Date}}</td>
+        <td style="border:1px solid #d0d7de;word-break:break-all"><a href="{{.URL}}">{{.URL}}</a></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p>暂无稳定版本条目。</p>
+  {{end}}
+  <p style="margin:16px 0 0;color:#57606a;font-size:13px">{{.Footer}}</p>
+  <p style="margin:4px 0 0;color:#8c959f;font-size:12px">生成时间：{{.GeneratedAt}} · 共 {{.Count}} 条</p>
+</div>

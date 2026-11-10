@@ -1,0 +1,70 @@
+# FeedWatch configuration reference (all supported keys).
+# The tracked template: copy to config.yaml (gitignored) or config.local.yaml
+# and adjust. Secrets never go here: the Resend key comes from the environment.
+
+poll:
+  interval: 30m          # Go duration: 10m / 30m / 1h / 6h
+  run_on_start: true     # run one cycle immediately, then tick
+  timeout: 2m            # hard timeout for one whole poll cycle
+
+http:
+  timeout: 15s           # per HTTP request
+  user_agent: "feedwatch/1.0 (+https://github.com/zsyo/feedwatch)"
+  retry_max: 3           # retries on network errors / 429 / 5xx
+  retry_base_delay: 500ms
+  conditional: true      # send ETag / Last-Modified, handle 304
+
+store:
+  type: jsonfile         # registry key; future: sqlite / redis
+  path: data/state.json  # relative path; Docker overrides via env + VOLUME
+  # options: {}          # passed through to the store implementation
+
+notify:
+  type: email            # registry key: email | log ; future: slack / webhook
+  mode: digest           # digest (one mail per cycle) | per_feed (one per project)
+  email:
+    provider: resend
+    from: "FeedWatch <releases@your-verified-domain.com>"  # verified domain required
+    to: [you@example.com]
+    # cc: []
+    subject_prefix: "[FeedWatch]"
+    api_key_env: RESEND_API_KEY   # name of the env var holding the key
+  # options: {}          # passed through to the notifier implementation
+
+log:
+  level: info            # debug | info | warn | error
+  format: text           # text | json
+
+feeds:
+  # type is the source registry key. Adding a source only requires a new
+  # implementation package + one Register() line in cmd/feedwatch/main.go.
+  - name: golang/go
+    type: atom
+    url: https://github.com/golang/go/releases.atom
+    enabled: true
+    filter:
+      # Defaults (when omitted): stable_only=true. A 3~4 segment numeric version
+      # is extracted from any human-readable title, e.g. "[release-branch.go1.27]
+      # go1.27.3", "Rust 1.99.1", "v3.15.2". Suffixes like rc3/a1/-beta.1 and
+      # non-version tags ("Python 3.10 end of life") are dropped.
+      stable_only: true
+      # include: ['^go\\d']                  # keep only titles matching any of these
+      # exclude: ['(?i)nightly']            # drop titles matching any of these
+      # version_pattern: '^v?(\\d+\\.\\d+\\.\\d+)$'  # override for 2-segment versions
+    options:
+      # content_policy: none | text (default, ~200 chars) | html
+      content_policy: text
+
+  - name: rust-lang/rust
+    type: atom
+    url: https://github.com/rust-lang/rust/releases.atom
+    enabled: true
+    filter:
+      stable_only: true
+
+  - name: python/cpython
+    type: atom
+    url: https://github.com/python/cpython/releases.atom
+    enabled: true
+    filter:
+      stable_only: true

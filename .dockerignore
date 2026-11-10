@@ -1,0 +1,13 @@
+.git
+.gitignore
+.workbuddy
+*.exe
+dist/
+data/
+.env
+# Never bake a real deployment config (domain / recipients) into an image layer.
+config.yaml
+config.local.yaml
+*.dryrun.json
+README.md
+Makefile

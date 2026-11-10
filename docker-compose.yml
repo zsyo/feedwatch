@@ -1,0 +1,24 @@
+services:
+  feedwatch:
+    build: .
+    image: feedwatch:latest
+    # ${RESEND_API_KEY} is substituted from the .env file in this directory.
+    # Copy .env.example -> .env and put the real key there.
+    environment:
+      TZ: Asia/Shanghai
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      FEEDWATCH_STATE_PATH: /app/data/state.json
+      FEEDWATCH_LOG_FORMAT: json
+      FEEDWATCH_CONFIG: /app/config.yaml
+    volumes:
+      # Create ./config.yaml first: cp config.example.yaml config.yaml
+      # (Docker would silently create a directory if the file is missing).
+      # Read-only mount: editing feeds never requires rebuilding the image.
+      - ./config.yaml:/app/config.yaml:ro
+      # Persisted seen IDs: the key to staying silent across restarts.
+      - feedwatch-data:/app/data
+    restart: unless-stopped
+    command: ["-config", "/app/config.yaml"]
+
+volumes:
+  feedwatch-data:
