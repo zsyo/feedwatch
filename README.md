@@ -192,6 +192,39 @@ docker compose restart    # 无新版本时应完全静默
 
 > **卷丢了会重发基线邮件**（因为程序会认为这是首次运行）。这是预期行为。若手工 `docker run`，记得 `-e RESEND_API_KEY=... -v feedwatch-data:/app/data`。
 
+### 把状态卷换成宿主机目录
+
+`docker-compose.yml` 里 `- feedwatch-data:/app/data` 用的是**命名卷**：左边是卷名而不是路径，数据由 Docker 自己保管（Linux 上在 `/var/lib/docker/volumes/<项目名>_feedwatch-data/_data`，Docker Desktop / WSL 则在虚拟机磁盘内），宿主机上看不到普通文件夹；文件末尾的 `volumes: feedwatch-data:` 只是声明这个卷存在。`docker compose down` 默认不删卷，`down -v` 才会。
+
+想让状态落在 compose 同目录的 `data/` 下，把这一行换成 bind mount 即可，**容器内路径 `/app/data` 与 `FEEDWATCH_STATE_PATH` 都不用改**：
+
+```yaml
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data          # 替换 - feedwatch-data:/app/data
+# 顶层 volumes: 段可整段删掉
+```
+
+容器以非 root 的 `app` 用户运行，宿主机目录得允许它写入，否则状态文件保存会失败（WSL + Docker Desktop 的文件共享通常较宽松，Linux 服务器上必须处理）：
+
+```bash
+mkdir -p data
+chmod 777 data                        # 或更精确：sudo chown <uid>:<gid> data
+docker compose up -d
+docker compose exec feedwatch id       # 查容器内实际 uid/gid 后再精确授权
+```
+
+`data/` 已在 `.gitignore` 中，不会进仓库。
+
+**切换等于从空状态开始**：新目录没有 `state.json`，程序会当成首次运行并重发一封基线通知。想保留已见集合，先把命名卷里的状态拷出来（真实卷名一般带项目名前缀，先用 `docker volume ls | grep feedwatch` 确认）：
+
+```bash
+docker run --rm -v feedwatch_feedwatch-data:/src -v "$PWD/data:/dst" alpine:3.21 \
+  cp /src/state.json /dst/state.json
+```
+
+想保留命名卷、只指定宿主机位置，也可以给顶层卷加 `driver_opts: {type: none, o: bind, device: /绝对路径/data}`，但日常直接用 `./data` 更简单。
+
 ## 发布镜像（GitHub Actions / GHCR）
 
 `.github/workflows/docker-publish.yml` 在推送 `v*` tag 时自动构建 **linux/amd64 + linux/arm64** 双架构镜像，发布到 GitHub Container Registry：`ghcr.io/zsyo/feedwatch`。Docker 会按宿主机架构自动挑选 manifest，同一条 `pull` 命令在 x86 服务器和 ARM 板子上都能用。镜像名由 `${{ github.repository }}` 自动生成，fork 后会变成 `ghcr.io/<你的用户名>/feedwatch`，无需改 workflow。
@@ -210,20 +243,20 @@ tag 必须是 `vMAJOR.MINOR.PATCH`（允许 `-rc.1` 一类后缀）；格式不�
 | `v1.2.3` | `1.2.3`、`1.2`、`latest` |
 | `v1.2.3-rc.1` | `1.2.3-rc.1`（预发布不会移动 `latest`） |
 
-CI 会把 tag 通过 `-ldflags "-X main.version=..."` 注入二进制，容器内 `./feedwatch -version` 能直接看到版本。**无需配置任何额外 secret**：用内置 `GITHUB_TOKEN` + `packages: write` 登录 GHCR，构建缓存走 GitHub Actions cache。
+> 表中是假设的版本号，用于说明映射规则；本项目当前实际发布的是 `v1.0.0`，对应镜像 `1.0.0` / `1.0` / `latest`。
 
-> **首次发布后要做一件事**：GHCR 的 package 默认是 **private**，服务器无法免登录拉取。到仓库右侧 `Packages → feedwatch → Package settings` 把可见性改成 Public；若保持私有，服务器需先 `docker login ghcr.io`（PAT 要有 `read:packages`）。
+CI 会把 tag 通过 `-ldflags "-X main.version=..."` 注入二进制，容器内 `./feedwatch -version` 能直接看到版本。**无需配置任何额外 secret**：用内置 `GITHUB_TOKEN` + `packages: write` 登录 GHCR，构建缓存走 GitHub Actions cache。
 
 ### 直接使用预构建镜像（服务器无需源码、无需本地编译）
 
 ```bash
 cp config.example.yaml config.yaml    # 填好 notify.email.from / to
-docker pull ghcr.io/zsyo/feedwatch:1.2.3
+docker pull ghcr.io/zsyo/feedwatch:latest
 docker run -d --name feedwatch \
   -e RESEND_API_KEY="re_xxx" \
   -v "$PWD/config.yaml:/app/config.yaml:ro" \
   -v feedwatch-data:/app/data \
-  ghcr.io/zsyo/feedwatch:1.2.3
+  ghcr.io/zsyo/feedwatch:latest
 ```
 
 > 用多通道时，把对应的 `-e WECOM_WEBHOOK_URL=...`、`-e TELEGRAM_BOT_TOKEN=...` 等一并加进 `docker run`（或写进 compose 的 `environment`）；漏掉的变量会在启动日志里直接报出名字。
@@ -233,8 +266,8 @@ docker run -d --name feedwatch \
 ```yaml
 services:
   feedwatch:
-    image: ghcr.io/zsyo/feedwatch:1.2.3   # 或 :latest
-    # build: .                            # 删除这一行
+    image: ghcr.io/zsyo/feedwatch:latest   # 也可指定具体的版本如 1.0.0
+    # build: .                             # 删除这一行
 ```
 
 然后 `docker compose pull && docker compose up -d`。
