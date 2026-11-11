@@ -1,8 +1,10 @@
-# Local binaries
+# Local binaries. The slash anchors the rule to the repo root: an unanchored
+# "feedwatch" also matches the cmd/feedwatch/ SOURCE directory, which would
+# silently keep main.go out of the repository and break Docker builds.
 *.exe
 *.test
 dist/
-feedwatch
+/feedwatch
 
 # Runtime state (contains the seen-ID baseline)
 data/

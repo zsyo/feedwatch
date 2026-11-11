@@ -1,0 +1,6 @@
+<b>{{.Subject}}</b>
+
+{{.Intro}}
+{{range .Items}}• <b>{{.Feed}}</b> <code>{{.Version}}</code> · {{.Date}} · <a href="{{.URL}}">Release 详情</a>
+{{end}}
+{{.Footer}}

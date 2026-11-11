@@ -60,11 +60,53 @@ type StoreConfig struct {
 	Options map[string]string `yaml:"options"`
 }
 
+// NotifyConfig supports two mutually exclusive forms:
+//
+//	legacy:  type: email          (a single channel, see also email/options)
+//	current: channels: [...]      (fan-out to any number of channels)
+//
+// When channels is non-empty it wins, so existing configs keep working.
 type NotifyConfig struct {
+	Type             string            `yaml:"type"`
+	Mode             string            `yaml:"mode"`
+	Email            EmailConfig       `yaml:"email"`
+	Options          map[string]string `yaml:"options"`
+	Channels         []ChannelConfig   `yaml:"channels"`
+	OnPartialFailure string            `yaml:"on_partial_failure"`
+}
+
+// ChannelConfig describes one delivery channel. Options are passed straight
+// to the implementation; ${ENV_VAR} references in values are expanded by the
+// composition root so webhook URLs / tokens / secrets never live in YAML.
+type ChannelConfig struct {
 	Type    string            `yaml:"type"`
-	Mode    string            `yaml:"mode"`
-	Email   EmailConfig       `yaml:"email"`
+	Name    string            `yaml:"name"`
+	Enabled bool              `yaml:"enabled"`
 	Options map[string]string `yaml:"options"`
+}
+
+// UnmarshalYAML makes enabled default to true for list elements.
+func (c *ChannelConfig) UnmarshalYAML(n *yaml.Node) error {
+	type raw ChannelConfig
+	v := raw{Enabled: true}
+	if err := n.Decode(&v); err != nil {
+		return err
+	}
+	*c = ChannelConfig(v)
+	return nil
+}
+
+// UsesEmail reports whether the Resend notifier is part of this config.
+func (c NotifyConfig) UsesEmail() bool {
+	if len(c.Channels) > 0 {
+		for _, ch := range c.Channels {
+			if ch.Enabled && ch.Type == "email" {
+				return true
+			}
+		}
+		return false
+	}
+	return c.Type == "email"
 }
 
 type EmailConfig struct {
@@ -137,8 +179,9 @@ func Default() Config {
 		},
 		Store: StoreConfig{Type: "jsonfile", Path: "data/state.json"},
 		Notify: NotifyConfig{
-			Type: "email",
-			Mode: "digest",
+			Type:             "email",
+			Mode:             "digest",
+			OnPartialFailure: "best_effort",
 			Email: EmailConfig{
 				Provider:      "resend",
 				SubjectPrefix: "[FeedWatch]",
@@ -200,13 +243,30 @@ func (c Config) Validate(dryRun bool) error {
 	if c.Store.Type == "" || c.Store.Path == "" {
 		return fmt.Errorf("store.type and store.path are required")
 	}
-	if c.Notify.Type == "" {
-		return fmt.Errorf("notify.type is required")
-	}
 	if c.Notify.Mode != "digest" && c.Notify.Mode != "per_feed" {
 		return fmt.Errorf("notify.mode must be digest or per_feed, got %q", c.Notify.Mode)
 	}
-	if c.Notify.Type == "email" {
+	if len(c.Notify.Channels) > 0 {
+		if p := c.Notify.OnPartialFailure; p != "" && p != "best_effort" && p != "strict" {
+			return fmt.Errorf("notify.on_partial_failure must be best_effort or strict, got %q", p)
+		}
+		enabled := 0
+		for i, ch := range c.Notify.Channels {
+			if !ch.Enabled {
+				continue
+			}
+			enabled++
+			if strings.TrimSpace(ch.Type) == "" {
+				return fmt.Errorf("notify.channels[%d].type is required", i)
+			}
+		}
+		if enabled == 0 {
+			return fmt.Errorf("notify.channels contains no enabled channel")
+		}
+	} else if c.Notify.Type == "" {
+		return fmt.Errorf("notify.type is required (or define notify.channels)")
+	}
+	if c.Notify.UsesEmail() {
 		e := c.Notify.Email
 		if e.Provider != "" && e.Provider != "resend" {
 			return fmt.Errorf("unsupported email provider %q", e.Provider)

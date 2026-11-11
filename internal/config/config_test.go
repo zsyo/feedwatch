@@ -170,6 +170,106 @@ feeds:
 	}
 }
 
+func TestChannelsFanOutConfig(t *testing.T) {
+	body := `
+notify:
+  on_partial_failure: strict
+  options:
+    retry_max: "4"
+  channels:
+    - type: wecom
+      name: 团队群
+      options:
+        webhook_url: ${FW_WECOM_URL}
+    - type: telegram
+      enabled: false
+      options:
+        chat_id: "@unused"
+feeds:
+  - name: x
+    type: atom
+    url: https://example.com/a.atom
+`
+	c, err := Load(writeConfig(t, body), Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.Notify.Channels) != 2 {
+		t.Fatalf("channels = %d", len(c.Notify.Channels))
+	}
+	if !c.Notify.Channels[0].Enabled || c.Notify.Channels[1].Enabled {
+		t.Errorf("enabled default/override wrong: %+v", c.Notify.Channels)
+	}
+	if c.Notify.Channels[0].Name != "团队群" {
+		t.Errorf("name lost: %+v", c.Notify.Channels[0])
+	}
+	if c.Notify.OnPartialFailure != "strict" {
+		t.Errorf("on_partial_failure = %q", c.Notify.OnPartialFailure)
+	}
+	if c.Notify.Options["retry_max"] != "4" {
+		t.Errorf("global options lost: %v", c.Notify.Options)
+	}
+	if c.Notify.UsesEmail() {
+		t.Error("UsesEmail should be false without an email channel")
+	}
+}
+
+func TestChannelValidation(t *testing.T) {
+	const feeds = "feeds:\n  - name: x\n    type: atom\n    url: https://example.com/a.atom\n"
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"missing type", "notify:\n  channels:\n    - options: {}\n" + feeds, "type is required"},
+		{"all disabled", "notify:\n  channels:\n    - type: wecom\n      enabled: false\n" + feeds, "no enabled channel"},
+		{"bad policy", "notify:\n  on_partial_failure: panic\n  channels:\n    - type: wecom\n" + feeds, "on_partial_failure"},
+		{"no type and no channels", "notify:\n  type: \"\"\n  mode: digest\n" + feeds, "notify.type is required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, tc.body), Overrides{})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestEmailChannelStillRequiresKey(t *testing.T) {
+	body := `
+notify:
+  email:
+    from: "FeedWatch <noreply@example.com>"
+    to: [you@example.com]
+  channels:
+    - type: email
+    - type: wecom
+      options:
+        webhook_url: https://example.com/hook
+feeds:
+  - name: x
+    type: atom
+    url: https://example.com/a.atom
+`
+	p := writeConfig(t, body)
+	t.Setenv("RESEND_API_KEY", "")
+	if _, err := Load(p, Overrides{}); err == nil || !strings.Contains(err.Error(), "RESEND_API_KEY") {
+		t.Fatalf("email channel must still require the API key, got %v", err)
+	}
+	if _, err := Load(p, Overrides{DryRun: true}); err != nil {
+		t.Fatalf("dry-run should bypass the key check: %v", err)
+	}
+	t.Setenv("RESEND_API_KEY", "re_test")
+	c, err := Load(p, Overrides{})
+	if err != nil {
+		t.Fatalf("Load with key: %v", err)
+	}
+	if !c.Notify.UsesEmail() {
+		t.Error("UsesEmail should be true for an email channel")
+	}
+}
+
 // config.example.yaml is the only tracked config and the Dockerfile bakes it
 // in as the image default, so it must always parse and validate standalone.
 func TestTrackedExampleConfigIsUsable(t *testing.T) {

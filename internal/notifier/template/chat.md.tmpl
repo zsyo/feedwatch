@@ -1,0 +1,7 @@
+**{{.Subject}}**
+
+{{.Intro}}
+{{range .Items}}- **{{.Feed}}** `{{.Version}}` · {{.Date}} · [Release 详情]({{.URL}})
+{{end}}
+{{.Footer}}
+生成时间：{{.GeneratedAt}}

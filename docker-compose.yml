@@ -2,11 +2,27 @@ services:
   feedwatch:
     build: .
     image: feedwatch:latest
-    # ${RESEND_API_KEY} is substituted from the .env file in this directory.
-    # Copy .env.example -> .env and put the real key there.
+    # ${VAR:-} is substituted from the .env file in this directory.
+    # Copy .env.example -> .env and fill in only the channels you enable.
+    # Quote values containing & or ? in .env (e.g. WECOM_WEBHOOK_URL="...?key=x&y=z").
     environment:
       TZ: Asia/Shanghai
       RESEND_API_KEY: ${RESEND_API_KEY:-}
+      WECOM_WEBHOOK_URL: ${WECOM_WEBHOOK_URL:-}
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
+      FEISHU_WEBHOOK_SECRET: ${FEISHU_WEBHOOK_SECRET:-}
+      DINGTALK_WEBHOOK_URL: ${DINGTALK_WEBHOOK_URL:-}
+      DINGTALK_WEBHOOK_SECRET: ${DINGTALK_WEBHOOK_SECRET:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      TEAMS_WEBHOOK_URL: ${TEAMS_WEBHOOK_URL:-}
+      BARK_WEBHOOK_URL: ${BARK_WEBHOOK_URL:-}
+      NTFY_TOPIC_URL: ${NTFY_TOPIC_URL:-}
+      NTFY_TOKEN: ${NTFY_TOKEN:-}
+      GENERIC_WEBHOOK_URL: ${GENERIC_WEBHOOK_URL:-}
+      GENERIC_TOKEN: ${GENERIC_TOKEN:-}
       FEEDWATCH_STATE_PATH: /app/data/state.json
       FEEDWATCH_LOG_FORMAT: json
       FEEDWATCH_CONFIG: /app/config.yaml
