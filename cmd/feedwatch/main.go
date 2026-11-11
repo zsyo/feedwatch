@@ -1,4 +1,4 @@
-// Command feedwatch polls release feeds and emails newly published versions.
+// Command feedwatch polls release feeds and notifies about new versions.
 // This file is the single composition root: it is the only place that knows
 // both the configuration and the concrete implementations.
 package main
@@ -90,27 +90,11 @@ func feedOptions(f config.FeedConfig, http config.HTTPConfig) map[string]string 
 }
 
 // channelSpecs is the only place that knows how YAML channels map to the
-// neutral NotifierSpec. Secrets are read from the environment here and
-// nowhere else; ${ENV_VAR} placeholders in options are expanded by config.
+// neutral NotifierSpec. Channel-specific settings stay in their own entry;
+// only mode / subject_prefix / options / on_partial_failure are global.
+// Secrets are read from the environment here and nowhere else; ${ENV_VAR}
+// placeholders in options are expanded by config.
 func channelSpecs(cfg config.Config) ([]notifier.NotifierSpec, error) {
-	base := notifier.NotifierSpec{
-		From:          cfg.Notify.Email.From,
-		To:            cfg.Notify.Email.To,
-		Cc:            cfg.Notify.Email.Cc,
-		SubjectPrefix: cfg.Notify.Email.SubjectPrefix,
-		APIKey:        os.Getenv(cfg.Notify.Email.APIKeyEnv),
-	}
-
-	// Legacy single-channel form: notify.type + notify.options.
-	if len(cfg.Notify.Channels) == 0 {
-		opts, missing := config.ExpandEnvRefs(cfg.Notify.Options)
-		if len(missing) > 0 {
-			return nil, fmt.Errorf("notify.options: unset environment variables: %s", strings.Join(missing, ", "))
-		}
-		base.Type, base.Options = cfg.Notify.Type, opts
-		return []notifier.NotifierSpec{base}, nil
-	}
-
 	specs := make([]notifier.NotifierSpec, 0, len(cfg.Notify.Channels))
 	for i, ch := range cfg.Notify.Channels {
 		if !ch.Enabled {
@@ -129,9 +113,26 @@ func channelSpecs(cfg config.Config) ([]notifier.NotifierSpec, error) {
 			return nil, fmt.Errorf("notify channel %q: unset environment variables: %s",
 				label, strings.Join(missing, ", "))
 		}
-		sp := base
-		sp.Type, sp.Name, sp.Options = ch.Type, ch.Name, opts
+		sp := notifier.NotifierSpec{
+			Type: ch.Type, Name: ch.Name, Options: opts,
+			SubjectPrefix: cfg.Notify.SubjectPrefix,
+		}
+		if v := strings.TrimSpace(opts["subject_prefix"]); v != "" {
+			sp.SubjectPrefix = v
+		}
+		if ch.Type == "email" {
+			e := ch.Email
+			sp.From, sp.To, sp.Cc = e.From, e.To, e.Cc
+			keyEnv := e.APIKeyEnv
+			if keyEnv == "" {
+				keyEnv = config.DefaultAPIKeyEnv
+			}
+			sp.APIKey = os.Getenv(keyEnv)
+		}
 		specs = append(specs, sp)
+	}
+	if len(specs) == 0 {
+		return nil, fmt.Errorf("notify.channels has no enabled channel")
 	}
 	return specs, nil
 }
@@ -140,7 +141,7 @@ func buildNotifier(cfg config.Config, reg *notifier.Registry, dryRun bool, log *
 	if dryRun {
 		// Dry-run replaces the entire fan-out, so no channel can send for real.
 		return reg.Build(notifier.NotifierSpec{
-			Type: "log", SubjectPrefix: cfg.Notify.Email.SubjectPrefix,
+			Type: "log", SubjectPrefix: cfg.Notify.SubjectPrefix,
 		}, log)
 	}
 	specs, err := channelSpecs(cfg)
@@ -168,9 +169,6 @@ func buildNotifier(cfg config.Config, reg *notifier.Registry, dryRun bool, log *
 func notifyLabel(cfg config.Config, dryRun bool) string {
 	if dryRun {
 		return "log (dry-run)"
-	}
-	if len(cfg.Notify.Channels) == 0 {
-		return cfg.Notify.Type
 	}
 	parts := make([]string, 0, len(cfg.Notify.Channels))
 	for _, ch := range cfg.Notify.Channels {

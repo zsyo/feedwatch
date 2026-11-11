@@ -27,15 +27,18 @@ func testRegistry() *notifier.Registry {
 
 func baseConfig() config.Config {
 	c := config.Default()
-	c.Notify.Type = "log"
+	// A single channel is just a one-element list.
+	c.Notify.Channels = []config.ChannelConfig{{Type: "log", Enabled: true}}
 	return c
 }
 
-func TestChannelSpecsLegacyFormIsBackwardCompatible(t *testing.T) {
+func TestChannelSpecsSingleChannel(t *testing.T) {
 	t.Setenv("FW_TOKEN", "https://hooks.example.com/abc")
 	cfg := baseConfig()
-	cfg.Notify.Type = "webhook"
-	cfg.Notify.Options = map[string]string{"webhook_url": "${FW_TOKEN}"}
+	cfg.Notify.Channels = []config.ChannelConfig{{
+		Type: "webhook", Enabled: true,
+		Options: map[string]string{"webhook_url": "${FW_TOKEN}"},
+	}}
 	specs, err := channelSpecs(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -45,6 +48,14 @@ func TestChannelSpecsLegacyFormIsBackwardCompatible(t *testing.T) {
 	}
 	if specs[0].Options["webhook_url"] != "https://hooks.example.com/abc" {
 		t.Errorf("env not expanded: %v", specs[0].Options)
+	}
+}
+
+func TestChannelSpecsRejectsNoEnabledChannel(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Notify.Channels = []config.ChannelConfig{{Type: "log", Enabled: false}}
+	if _, err := channelSpecs(cfg); err == nil {
+		t.Fatal("expected an error when no channel is enabled")
 	}
 }
 
@@ -125,10 +136,50 @@ func TestBuildNotifierFanOutAndUnknownType(t *testing.T) {
 	}
 }
 
+func TestChannelSpecsEmailSettingsComeFromTheirChannel(t *testing.T) {
+	t.Setenv("FW_KEY_A", "re_first")
+	t.Setenv("FW_KEY_B", "re_second")
+	cfg := baseConfig()
+	cfg.Notify.SubjectPrefix = "[FW]"
+	cfg.Notify.Channels = []config.ChannelConfig{
+		{
+			Type: "email", Name: "团队", Enabled: true,
+			Email: config.EmailConfig{
+				From: "A <a@example.com>", To: []string{"a@example.com"},
+				Cc: []string{"cc@example.com"}, APIKeyEnv: "FW_KEY_A",
+			},
+		},
+		{
+			Type: "email", Name: "个人", Enabled: true,
+			Email: config.EmailConfig{
+				From: "B <b@example.com>", To: []string{"b@example.com"},
+				APIKeyEnv: "FW_KEY_B",
+			},
+			Options: map[string]string{"subject_prefix": "[Personal]"},
+		},
+	}
+	specs, err := channelSpecs(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 2 {
+		t.Fatalf("specs = %+v", specs)
+	}
+	if specs[0].From != "A <a@example.com>" || specs[0].To[0] != "a@example.com" ||
+		specs[0].Cc[0] != "cc@example.com" || specs[0].APIKey != "re_first" ||
+		specs[0].SubjectPrefix != "[FW]" {
+		t.Errorf("first email channel = %+v", specs[0])
+	}
+	if specs[1].From != "B <b@example.com>" || specs[1].APIKey != "re_second" ||
+		specs[1].SubjectPrefix != "[Personal]" {
+		t.Errorf("second email channel = %+v", specs[1])
+	}
+}
+
 func TestNotifyLabel(t *testing.T) {
 	cfg := baseConfig()
 	if got := notifyLabel(cfg, false); got != "log" {
-		t.Errorf("legacy label = %q", got)
+		t.Errorf("single-channel label = %q", got)
 	}
 	cfg.Notify.Channels = []config.ChannelConfig{
 		{Type: "wecom", Enabled: true}, {Type: "slack", Enabled: false},

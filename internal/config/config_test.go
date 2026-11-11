@@ -19,12 +19,15 @@ func writeConfig(t *testing.T, body string) string {
 
 const minimalYAML = `
 notify:
-  type: log
+  channels:
+    - type: log
 feeds:
   - name: golang/go
     type: atom
     url: https://github.com/golang/go/releases.atom
 `
+
+const validFeeds = "feeds:\n  - name: x\n    type: atom\n    url: https://example.com/a.atom\n"
 
 func TestLoadAppliesDefaults(t *testing.T) {
 	c, err := Load(writeConfig(t, minimalYAML), Overrides{})
@@ -43,7 +46,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if c.Store.Type != "jsonfile" || c.Store.Path != "data/state.json" {
 		t.Errorf("unexpected store defaults: %+v", c.Store)
 	}
-	if c.Notify.Mode != "digest" || c.Notify.Email.SubjectPrefix != "[FeedWatch]" {
+	if c.Notify.Mode != "digest" || c.Notify.SubjectPrefix != "[FeedWatch]" {
 		t.Errorf("unexpected notify defaults: %+v", c.Notify)
 	}
 	if len(c.Feeds) != 1 || !c.Feeds[0].Enabled {
@@ -57,7 +60,8 @@ func TestLoadAppliesDefaults(t *testing.T) {
 func TestFeedLevelDefaultsSurviveNestedFilter(t *testing.T) {
 	body := `
 notify:
-  type: log
+  channels:
+    - type: log
 feeds:
   - name: python/cpython
     type: atom
@@ -89,7 +93,8 @@ log:
   level: debug
   format: text
 notify:
-  type: log
+  channels:
+    - type: log
 feeds:
   - name: rust-lang/rust
     type: atom
@@ -129,10 +134,12 @@ func TestValidateRejectsBadConfig(t *testing.T) {
 		body string
 		want string
 	}{
-		{"no feeds", "notify:\n  type: log\n", "at least one enabled feed"},
+		{"no feeds", "notify:\n  channels:\n    - type: log\n", "at least one enabled feed"},
 		{"duplicate name", minimalYAML + "  - name: golang/go\n    type: atom\n    url: https://example.com/a.atom\n", "duplicate feed name"},
-		{"bad url", "notify:\n  type: log\nfeeds:\n  - name: x\n    type: atom\n    url: ftp://x\n", "must start with http"},
-		{"bad mode", "notify:\n  type: log\n  mode: hourly\n" + "feeds:\n  - name: x\n    type: atom\n    url: https://x/a.atom\n", "must be digest or per_feed"},
+		{"bad url", "notify:\n  channels:\n    - type: log\nfeeds:\n  - name: x\n    type: atom\n    url: ftp://x\n", "must start with http"},
+		{"bad mode", "notify:\n  mode: hourly\n  channels:\n    - type: log\n" + validFeeds, "must be digest or per_feed"},
+		{"no channels", "notify:\n  mode: digest\n" + validFeeds, "notify.channels needs at least one enabled channel"},
+		{"removed type form", "notify:\n  type: email\n" + validFeeds, "old notify.type form was removed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -147,15 +154,12 @@ func TestValidateRejectsBadConfig(t *testing.T) {
 func TestEmailRequiresAPIKeyUnlessDryRun(t *testing.T) {
 	body := `
 notify:
-  type: email
-  email:
-    from: "FeedWatch <noreply@example.com>"
-    to: [you@example.com]
-feeds:
-  - name: x
-    type: atom
-    url: https://example.com/a.atom
-`
+  channels:
+    - type: email
+      email:
+        from: "FeedWatch <noreply@example.com>"
+        to: [you@example.com]
+` + validFeeds
 	t.Setenv("RESEND_API_KEY", "")
 	p := writeConfig(t, body)
 	if _, err := Load(p, Overrides{}); err == nil || !strings.Contains(err.Error(), "RESEND_API_KEY") {
@@ -185,11 +189,7 @@ notify:
       enabled: false
       options:
         chat_id: "@unused"
-feeds:
-  - name: x
-    type: atom
-    url: https://example.com/a.atom
-`
+` + validFeeds
 	c, err := Load(writeConfig(t, body), Overrides{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -215,16 +215,14 @@ feeds:
 }
 
 func TestChannelValidation(t *testing.T) {
-	const feeds = "feeds:\n  - name: x\n    type: atom\n    url: https://example.com/a.atom\n"
 	cases := []struct {
 		name string
 		body string
 		want string
 	}{
-		{"missing type", "notify:\n  channels:\n    - options: {}\n" + feeds, "type is required"},
-		{"all disabled", "notify:\n  channels:\n    - type: wecom\n      enabled: false\n" + feeds, "no enabled channel"},
-		{"bad policy", "notify:\n  on_partial_failure: panic\n  channels:\n    - type: wecom\n" + feeds, "on_partial_failure"},
-		{"no type and no channels", "notify:\n  type: \"\"\n  mode: digest\n" + feeds, "notify.type is required"},
+		{"missing type", "notify:\n  channels:\n    - options: {}\n" + validFeeds, "type is required"},
+		{"all disabled", "notify:\n  channels:\n    - type: wecom\n      enabled: false\n" + validFeeds, "needs at least one enabled channel"},
+		{"bad policy", "notify:\n  on_partial_failure: panic\n  channels:\n    - type: wecom\n" + validFeeds, "on_partial_failure"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -236,22 +234,41 @@ func TestChannelValidation(t *testing.T) {
 	}
 }
 
+// Mode is a global watcher setting, not a per-channel option: it is read the
+// same way whether one channel or several are configured.
+func TestModeIsGlobalAcrossChannelCounts(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"one channel", "notify:\n  mode: per_feed\n  channels:\n    - type: log\n" + validFeeds},
+		{"two channels", "notify:\n  mode: per_feed\n  channels:\n    - type: log\n    - type: wecom\n      options:\n        webhook_url: https://example.com/hook\n" + validFeeds},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := Load(writeConfig(t, tc.body), Overrides{})
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Notify.Mode != "per_feed" {
+				t.Errorf("mode = %q, want per_feed", c.Notify.Mode)
+			}
+		})
+	}
+}
+
 func TestEmailChannelStillRequiresKey(t *testing.T) {
 	body := `
 notify:
-  email:
-    from: "FeedWatch <noreply@example.com>"
-    to: [you@example.com]
   channels:
     - type: email
+      email:
+        from: "FeedWatch <noreply@example.com>"
+        to: [you@example.com]
     - type: wecom
       options:
         webhook_url: https://example.com/hook
-feeds:
-  - name: x
-    type: atom
-    url: https://example.com/a.atom
-`
+` + validFeeds
 	p := writeConfig(t, body)
 	t.Setenv("RESEND_API_KEY", "")
 	if _, err := Load(p, Overrides{}); err == nil || !strings.Contains(err.Error(), "RESEND_API_KEY") {
@@ -270,6 +287,43 @@ feeds:
 	}
 }
 
+// Email settings belong to their channel, so two email channels can have
+// different senders/recipients and each one is validated independently.
+func TestEmailSettingsArePerChannel(t *testing.T) {
+	body := `
+notify:
+  channels:
+    - type: email
+      email:
+        from: "A <a@example.com>"
+        to: [a@example.com]
+        api_key_env: FW_KEY_A
+    - type: email
+      email:
+        from: "B <b@example.com>"
+        to: [b@example.com]
+        api_key_env: FW_KEY_B
+` + validFeeds
+	c, err := Load(writeConfig(t, body), Overrides{DryRun: true})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.Notify.Channels) != 2 {
+		t.Fatalf("channels = %+v", c.Notify.Channels)
+	}
+	if c.Notify.Channels[0].Email.From != "A <a@example.com>" ||
+		c.Notify.Channels[1].Email.To[0] != "b@example.com" ||
+		c.Notify.Channels[0].Email.APIKeyEnv == c.Notify.Channels[1].Email.APIKeyEnv {
+		t.Errorf("email settings leaked between channels: %+v", c.Notify.Channels)
+	}
+
+	bad := strings.Replace(body, `from: "B <b@example.com>"`, `from: ""`, 1)
+	_, err = Load(writeConfig(t, bad), Overrides{DryRun: true})
+	if err == nil || !strings.Contains(err.Error(), "notify.channels[1].email.from") {
+		t.Fatalf("want per-channel validation with index, got %v", err)
+	}
+}
+
 // config.example.yaml is the only tracked config and the Dockerfile bakes it
 // in as the image default, so it must always parse and validate standalone.
 func TestTrackedExampleConfigIsUsable(t *testing.T) {
@@ -281,7 +335,11 @@ func TestTrackedExampleConfigIsUsable(t *testing.T) {
 	if len(c.Feeds) < 3 {
 		t.Errorf("expected at least the three default feeds, got %d", len(c.Feeds))
 	}
-	if c.Notify.Type != "email" || len(c.Notify.Email.To) == 0 {
-		t.Errorf("unexpected notify config in template: %+v", c.Notify)
+	if !c.Notify.UsesEmail() {
+		t.Errorf("template should enable an email channel: %+v", c.Notify.Channels)
+	}
+	if len(c.Notify.Channels) != 1 || c.Notify.Channels[0].Type != "email" ||
+		len(c.Notify.Channels[0].Email.To) == 0 {
+		t.Errorf("template should carry its email settings inside the channel: %+v", c.Notify.Channels)
 	}
 }

@@ -39,7 +39,7 @@ func TestMultiBestEffort(t *testing.T) {
 		{"all succeed", []error{nil, nil, nil}, BestEffort, false, 3},
 		{"one fails", []error{nil, failErr, nil}, BestEffort, false, 3},
 		{"all fail", []error{failErr, failErr}, BestEffort, true, 2},
-		{"single fails (legacy semantics)", []error{failErr}, BestEffort, true, 1},
+		{"single channel fails", []error{failErr}, BestEffort, true, 1},
 		{"strict with one failure", []error{nil, failErr}, Strict, true, 2},
 		{"strict all succeed", []error{nil, nil}, Strict, false, 2},
 	}

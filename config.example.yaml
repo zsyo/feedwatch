@@ -20,75 +20,76 @@ store:
   # options: {}          # passed through to the store implementation
 
 notify:
-  # ---- 单通道（向后兼容）----
-  type: email            # email | log | wecom | feishu | dingtalk | telegram |
-                         # slack | discord | teams | bark | ntfy | webhook
+  # ---- 全局项（对所有渠道生效）----
   mode: digest           # digest (one push per cycle) | per_feed (one per project)
-  email:
-    provider: resend
-    from: "FeedWatch <releases@your-verified-domain.com>"  # verified domain required
-    to: [you@example.com]
-    # cc: []
-    subject_prefix: "[FeedWatch]"
-    api_key_env: RESEND_API_KEY   # name of the env var holding the key
-  # options: {}          # defaults shared by all channels; ${ENV_VAR} is expanded
-
-  # ---- 多通道（推荐）----
-  # channels 一旦出现就取代上面的 type：同一条通知会推送到每个 enabled 渠道。
-  # 所有敏感值都用 ${ENV_VAR} 占位，容器/系统环境变量里放真实值，绝不写进 YAML。
-  # on_partial_failure: best_effort  # 默认。至少一个渠道成功即算成功，避免重复推送
+                         # 每条通知都会发给所有 enabled 渠道；首轮基线始终是 1 条汇总
+  # subject_prefix: "[FeedWatch]"   # 所有渠道共用的标题前缀，可省略
+  # options: {}          # 所有渠道共享的默认值，被各渠道 options 覆盖
+  #                      # 值里的 ${ENV_VAR} 启动时展开，缺失会直接报出变量名
+  # on_partial_failure: best_effort  # 默认：至少一个渠道成功即算成功，避免重复推送
   #                     strict       # 任一渠道失败就报错，下轮整体重试（可能重复）
-  # channels:
-  #   - type: wecom
-  #     name: 企业微信群
-  #     options:
-  #       webhook_url: ${WECOM_WEBHOOK_URL}
-  #       msg_type: markdown          # markdown(默认) | text
-  #       # mentioned_list: "@all"    # 仅 text 有效
-  #   - type: feishu
-  #     name: 飞书群
-  #     options:
-  #       webhook_url: ${FEISHU_WEBHOOK_URL}
-  #       secret: ${FEISHU_WEBHOOK_SECRET}   # 可选：开启签名校验时填
-  #       msg_type: text              # text(默认) | card（交互卡片）
-  #   - type: dingtalk
-  #     options:
-  #       webhook_url: ${DINGTALK_WEBHOOK_URL}
-  #       secret: ${DINGTALK_WEBHOOK_SECRET} # 可选：开启「加签」时填（SEC 开头）
-  #       msg_type: markdown          # markdown(默认) | text
-  #   - type: telegram
-  #     options:
-  #       token: ${TELEGRAM_BOT_TOKEN}
-  #       chat_id: ${TELEGRAM_CHAT_ID}       # @channel 或 -1001234567890
-  #       parse_mode: HTML            # HTML(默认，最安全) | MarkdownV2 | Markdown | text
-  #   - type: slack
-  #     options:
-  #       webhook_url: ${SLACK_WEBHOOK_URL}
-  #   - type: discord
-  #     options:
-  #       webhook_url: ${DISCORD_WEBHOOK_URL}
-  #       # username: FeedWatch
-  #       # avatar_url: https://...
-  #   - type: teams
-  #     options:
-  #       webhook_url: ${TEAMS_WEBHOOK_URL}  # 用 Workflows 生成的 URL（Adaptive Card）
-  #   - type: bark
-  #     options:
-  #       webhook_url: ${BARK_WEBHOOK_URL}   # https://api.day.app/<device_key>
-  #       # group: FeedWatch
-  #   - type: ntfy
-  #     options:
-  #       webhook_url: ${NTFY_TOPIC_URL}     # https://ntfy.sh/<topic>
-  #       # token: ${NTFY_TOKEN}            # 自建服务需要鉴权时
-  #       # priority: default
-  #   - type: webhook                       # 通用：Gotify / Pushover / Server酱 / 自研
-  #     options:
-  #       webhook_url: ${GENERIC_WEBHOOK_URL}
-  #       # method: POST
-  #       # content_type: application/json
-  #       # header.Authorization: Bearer ${GENERIC_TOKEN}
-  #       # body: '{"title":{{json .Subject}},"message":{{json .Text}},"count":{{.Count}}}'
-  #   # - type: email                       # 也可以把邮件混进多通道，复用上面的 email 块
+
+  # ---- 渠道列表：每个渠道的参数都写在自己的条目里 ----
+  # 所有敏感值都用 ${ENV_VAR} 占位，容器/系统环境变量里放真实值，绝不写进 YAML。
+  channels:
+    - type: email                     # 默认只发邮件；替换或追加下面的条目即可
+      email:                          # email 渠道专属参数
+        provider: resend
+        from: "FeedWatch <releases@your-verified-domain.com>"  # verified domain required
+        to: [you@example.com]
+        # cc: []
+        api_key_env: RESEND_API_KEY   # name of the env var holding the key
+
+    # - type: wecom
+    #   name: 企业微信群
+    #   options:
+    #     webhook_url: ${WECOM_WEBHOOK_URL}
+    #     msg_type: markdown          # markdown(默认) | text
+    #     # mentioned_list: "@all"    # 仅 text 有效
+    # - type: feishu
+    #   name: 飞书群
+    #   options:
+    #     webhook_url: ${FEISHU_WEBHOOK_URL}
+    #     secret: ${FEISHU_WEBHOOK_SECRET}   # 可选：开启签名校验时填
+    #     msg_type: text              # text(默认) | card（交互卡片）
+    # - type: dingtalk
+    #   options:
+    #     webhook_url: ${DINGTALK_WEBHOOK_URL}
+    #     secret: ${DINGTALK_WEBHOOK_SECRET} # 可选：开启「加签」时填（SEC 开头）
+    #     msg_type: markdown          # markdown(默认) | text
+    # - type: telegram
+    #   options:
+    #     token: ${TELEGRAM_BOT_TOKEN}
+    #     chat_id: ${TELEGRAM_CHAT_ID}       # @channel 或 -1001234567890
+    #     parse_mode: HTML            # HTML(默认，最安全) | MarkdownV2 | Markdown | text
+    # - type: slack
+    #   options:
+    #     webhook_url: ${SLACK_WEBHOOK_URL}
+    # - type: discord
+    #   options:
+    #     webhook_url: ${DISCORD_WEBHOOK_URL}
+    #     # username: FeedWatch
+    #     # avatar_url: https://...
+    # - type: teams
+    #   options:
+    #     webhook_url: ${TEAMS_WEBHOOK_URL}  # 用 Workflows 生成的 URL（Adaptive Card）
+    # - type: bark
+    #   options:
+    #     webhook_url: ${BARK_WEBHOOK_URL}   # https://api.day.app/<device_key>
+    #     # group: FeedWatch
+    # - type: ntfy
+    #   options:
+    #     webhook_url: ${NTFY_TOPIC_URL}     # https://ntfy.sh/<topic>
+    #     # token: ${NTFY_TOKEN}            # 自建服务需要鉴权时
+    #     # priority: default
+    # - type: webhook                       # 通用：Gotify / Pushover / Server酱 / 自研
+    #   options:
+    #     webhook_url: ${GENERIC_WEBHOOK_URL}
+    #     # method: POST
+    #     # content_type: application/json
+    #     # header.Authorization: Bearer ${GENERIC_TOKEN}
+    #     # body: '{"title":{{json .Subject}},"message":{{json .Text}},"count":{{.Count}}}'
+    # - type: log                          # 只写日志，本地调试用
 
 log:
   level: info            # debug | info | warn | error

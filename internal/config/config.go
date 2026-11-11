@@ -60,16 +60,15 @@ type StoreConfig struct {
 	Options map[string]string `yaml:"options"`
 }
 
-// NotifyConfig supports two mutually exclusive forms:
-//
-//	legacy:  type: email          (a single channel, see also email/options)
-//	current: channels: [...]      (fan-out to any number of channels)
-//
-// When channels is non-empty it wins, so existing configs keep working.
+// NotifyConfig holds only settings that apply to every channel. Everything
+// channel-specific lives inside its channels[] entry: webhook channels use
+// options, email channels use their own email block.
+// Mode is deliberately first: it is a global watcher setting (how many
+// notifications one cycle produces), not a per-channel option. Keeping it
+// here mirrors the top of config.example.yaml.
 type NotifyConfig struct {
-	Type             string            `yaml:"type"`
-	Mode             string            `yaml:"mode"`
-	Email            EmailConfig       `yaml:"email"`
+	Mode             string            `yaml:"mode"` // global, channel-independent
+	SubjectPrefix    string            `yaml:"subject_prefix"`
 	Options          map[string]string `yaml:"options"`
 	Channels         []ChannelConfig   `yaml:"channels"`
 	OnPartialFailure string            `yaml:"on_partial_failure"`
@@ -78,11 +77,14 @@ type NotifyConfig struct {
 // ChannelConfig describes one delivery channel. Options are passed straight
 // to the implementation; ${ENV_VAR} references in values are expanded by the
 // composition root so webhook URLs / tokens / secrets never live in YAML.
+// Email is read only when Type == "email"; it keeps the recipient list typed
+// instead of flattening it into a string option.
 type ChannelConfig struct {
 	Type    string            `yaml:"type"`
 	Name    string            `yaml:"name"`
 	Enabled bool              `yaml:"enabled"`
 	Options map[string]string `yaml:"options"`
+	Email   EmailConfig       `yaml:"email"`
 }
 
 // UnmarshalYAML makes enabled default to true for list elements.
@@ -96,27 +98,31 @@ func (c *ChannelConfig) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-// UsesEmail reports whether the Resend notifier is part of this config.
+// UsesEmail reports whether the Resend notifier is among the enabled channels.
 func (c NotifyConfig) UsesEmail() bool {
-	if len(c.Channels) > 0 {
-		for _, ch := range c.Channels {
-			if ch.Enabled && ch.Type == "email" {
-				return true
-			}
+	for _, ch := range c.Channels {
+		if ch.Enabled && ch.Type == "email" {
+			return true
 		}
-		return false
 	}
-	return c.Type == "email"
+	return false
 }
 
+// EmailConfig belongs to one email channel, not to notify itself. APIKeyEnv
+// names the environment variable holding the Resend key; the key value itself
+// is never read from YAML.
 type EmailConfig struct {
-	Provider      string   `yaml:"provider"`
-	From          string   `yaml:"from"`
-	To            []string `yaml:"to"`
-	Cc            []string `yaml:"cc"`
-	SubjectPrefix string   `yaml:"subject_prefix"`
-	APIKeyEnv     string   `yaml:"api_key_env"`
+	Provider  string   `yaml:"provider"`
+	From      string   `yaml:"from"`
+	To        []string `yaml:"to"`
+	Cc        []string `yaml:"cc"`
+	APIKeyEnv string   `yaml:"api_key_env"`
 }
+
+const (
+	DefaultSubjectPrefix = "[FeedWatch]"
+	DefaultAPIKeyEnv     = "RESEND_API_KEY"
+)
 
 type LogConfig struct {
 	Level  string `yaml:"level"`
@@ -179,14 +185,9 @@ func Default() Config {
 		},
 		Store: StoreConfig{Type: "jsonfile", Path: "data/state.json"},
 		Notify: NotifyConfig{
-			Type:             "email",
 			Mode:             "digest",
+			SubjectPrefix:    DefaultSubjectPrefix,
 			OnPartialFailure: "best_effort",
-			Email: EmailConfig{
-				Provider:      "resend",
-				SubjectPrefix: "[FeedWatch]",
-				APIKeyEnv:     "RESEND_API_KEY",
-			},
 		},
 		Log: LogConfig{Level: "info", Format: "text"},
 	}
@@ -246,42 +247,42 @@ func (c Config) Validate(dryRun bool) error {
 	if c.Notify.Mode != "digest" && c.Notify.Mode != "per_feed" {
 		return fmt.Errorf("notify.mode must be digest or per_feed, got %q", c.Notify.Mode)
 	}
-	if len(c.Notify.Channels) > 0 {
-		if p := c.Notify.OnPartialFailure; p != "" && p != "best_effort" && p != "strict" {
-			return fmt.Errorf("notify.on_partial_failure must be best_effort or strict, got %q", p)
-		}
-		enabled := 0
-		for i, ch := range c.Notify.Channels {
-			if !ch.Enabled {
-				continue
-			}
-			enabled++
-			if strings.TrimSpace(ch.Type) == "" {
-				return fmt.Errorf("notify.channels[%d].type is required", i)
-			}
-		}
-		if enabled == 0 {
-			return fmt.Errorf("notify.channels contains no enabled channel")
-		}
-	} else if c.Notify.Type == "" {
-		return fmt.Errorf("notify.type is required (or define notify.channels)")
+	if p := c.Notify.OnPartialFailure; p != "" && p != "best_effort" && p != "strict" {
+		return fmt.Errorf("notify.on_partial_failure must be best_effort or strict, got %q", p)
 	}
-	if c.Notify.UsesEmail() {
-		e := c.Notify.Email
+	channelCount := 0
+	for i, ch := range c.Notify.Channels {
+		if !ch.Enabled {
+			continue
+		}
+		channelCount++
+		if strings.TrimSpace(ch.Type) == "" {
+			return fmt.Errorf("notify.channels[%d].type is required", i)
+		}
+	}
+	if channelCount == 0 {
+		return fmt.Errorf("notify.channels needs at least one enabled channel (the old notify.type form was removed; see config.example.yaml)")
+	}
+	for i, ch := range c.Notify.Channels {
+		if !ch.Enabled || ch.Type != "email" {
+			continue
+		}
+		e := ch.Email
 		if e.Provider != "" && e.Provider != "resend" {
-			return fmt.Errorf("unsupported email provider %q", e.Provider)
+			return fmt.Errorf("notify.channels[%d].email: unsupported email provider %q", i, e.Provider)
 		}
 		if strings.TrimSpace(e.From) == "" {
-			return fmt.Errorf("notify.email.from is required (Resend verified domain)")
+			return fmt.Errorf("notify.channels[%d].email.from is required (Resend verified domain)", i)
 		}
 		if len(e.To) == 0 {
-			return fmt.Errorf("notify.email.to must contain at least one recipient")
+			return fmt.Errorf("notify.channels[%d].email.to must contain at least one recipient", i)
 		}
-		if e.APIKeyEnv == "" {
-			return fmt.Errorf("notify.email.api_key_env is required")
+		keyEnv := e.APIKeyEnv
+		if keyEnv == "" {
+			keyEnv = DefaultAPIKeyEnv
 		}
-		if !dryRun && os.Getenv(e.APIKeyEnv) == "" {
-			return fmt.Errorf("environment variable %s is not set (set it, or use -dry-run / notify.type: log)", e.APIKeyEnv)
+		if !dryRun && os.Getenv(keyEnv) == "" {
+			return fmt.Errorf("environment variable %s is not set (set it, or use -dry-run / a channels entry with type: log)", keyEnv)
 		}
 	}
 

@@ -17,7 +17,7 @@
 | **首次启动**（没有状态文件） | 抓取全部 feed，发 **1 封「当前版本基线」汇总邮件**，列出每个项目当前最新稳定版；发信成功后才把抓到的所有条目标记为已见 |
 | **之后每轮** | 只对新增的稳定版发通知，**一轮合并成 1 封汇总邮件** |
 | **重启容器 / 重启进程但无新版本** | **完全静默**，不调用任何通知渠道 |
-| 单通道发送失败 | **不提交状态**，新 ID 保持未见，下一轮自动重试（at-least-once） |
+| 只有一个渠道且发送失败 | **不提交状态**，新 ID 保持未见，下一轮自动重试（at-least-once） |
 | 多通道部分失败 | 默认 `best_effort`：只要有一个渠道送达就提交状态（失败渠道只记日志，不重试、不产生重复推送）；`strict` 则整批报错重试 |
 | 某个 feed 抓取失败 | 跳过该 feed，其它 feed 正常通知；首轮若有任一 feed 失败则整封基线通知推迟 |
 | HTTP 304 | 不做 diff、不改写已见集合、不发通知 |
@@ -40,15 +40,15 @@ cp config.example.yaml config.yaml   # PowerShell: Copy-Item config.example.yaml
 
 > 装了 GNU make 的话也可用 `make init`（幂等，不会覆盖已有配置）；Windows 自带的 Git Bash 默认没有 make。
 
-默认模板走 Resend 单邮件通道：把 `notify.email.from`（必须是 Resend 已验证域名）和 `to` 改成你自己的值。想推送到企业微信 / 飞书 / Telegram 等，见下面的[通知渠道](#通知渠道)章节——在 `config.yaml` 里打开 `notify.channels`，并把对应的 webhook URL / token 填进环境变量即可。
+默认模板在 `notify.channels` 里只配了一条 `email`（Resend 邮件）：把该条目下 `email.from`（必须是 Resend 已验证域名）和 `email.to` 改成你自己的值。想推送到企业微信 / 飞书 / Telegram 等，见下面的[通知渠道](#通知渠道)章节——在 `channels` 里替换或追加条目，并把对应的 webhook URL / token 填进环境变量即可。
 
 ```powershell
 # ① 最安全：预览基线邮件，零网络发送、不碰正式状态文件
 .\feedwatch.exe -config config.yaml -once -dry-run
 .\feedwatch.exe -config config.yaml -once -dry-run   # 第二次：应完全静默（验证重启语义）
 
-# ② 全链路本地调试：把 notify.type 改成 log，也不发真实邮件
-#    （复制 config.yaml 为 config.local.yaml，改 notify.type: log、store.path: data/state.local.json）
+# ② 全链路本地调试：channels 里只留 - type: log，也不发真实邮件
+#    （复制 config.yaml 为 config.local.yaml，改 channels 和 store.path: data/state.local.json）
 .\feedwatch.exe -config config.local.yaml -once
 
 # ③ 真实发信
@@ -74,7 +74,7 @@ $env:RESEND_API_KEY="re_xxx"
 | `-log-format` | `FEEDWATCH_LOG_FORMAT` | `text/json`（容器建议 json） |
 | `-version` | — | 打印版本 |
 
-敏感信息只从环境变量读：`RESEND_API_KEY`（变量名可由 `notify.email.api_key_env` 改），以及各渠道的 `*_WEBHOOK_URL` / `*_TOKEN` / `*_SECRET`。配置里写 `${NAME}` 占位符，启动时展开；缺失会直接报出变量名。见 `.env.example`。**不要把真实密钥写进 YAML**。
+敏感信息只从环境变量读：`RESEND_API_KEY`（变量名可由 email 渠道条目的 `email.api_key_env` 改），以及各渠道的 `*_WEBHOOK_URL` / `*_TOKEN` / `*_SECRET`。配置里写 `${NAME}` 占位符，启动时展开；缺失会直接报出变量名。见 `.env.example`。**不要把真实密钥写进 YAML**。
 
 ## 配置
 
@@ -105,19 +105,24 @@ feeds:
 
 ## 通知渠道
 
-`notify.channels` 是一个列表：同一条通知会依次推送给每个 `enabled` 的渠道，互不干扰。列表出现时旧的 `notify.type` 会被忽略，所以**已有单邮件配置无需改动**。
+`notify.channels` 是唯一的通知配置写法：列表里每一条是一个渠道，同一条通知会依次推送给所有 `enabled` 的渠道，互不干扰。只推一个渠道就写一条（单元素列表），不需要另外一套配置。**`notify` 外层只放全局项**（`mode` / `subject_prefix` / `options` / `on_partial_failure`）；每个渠道的参数都写在自己的条目里——webhook 类放 `options`，邮件放 `email` 子块。旧版的 `notify.type` 与顶层 `notify.email` 都已移除，升级时把它们整体挪进对应的渠道条目即可。
+
+`notify.mode` 是全局项、与通道无关，所以写在 `notify` 第一项：`digest`（默认）每轮把新版本汇总成 1 条，`per_feed` 按项目拆成多条；每条都会复制给所有 enabled 渠道。首轮基线通知固定是 1 条汇总，不受 `per_feed` 影响。`subject_prefix` 是所有渠道共用的标题前缀（可在渠道的 `options.subject_prefix` 覆盖），`notify.options` 是所有渠道共享的默认值，会被各渠道自己的 `options` 覆盖。
 
 ```yaml
 notify:
-  mode: digest
+  mode: digest                      # 全局，与通道无关：digest | per_feed
+  subject_prefix: "[FeedWatch]"     # 全局：所有渠道共用的标题前缀（可省略）
   on_partial_failure: best_effort   # best_effort(默认) | strict
   options:                         # 所有渠道共享的默认值
     timeout: 10s
     retry_max: 2
-  email:                           # 任意渠道里含 email 时复用这一块
-    from: "FeedWatch <releases@your-verified-domain.com>"
-    to: [you@example.com]
   channels:
+    - type: email                  # 也可以混搭邮件
+      email:                       # 该渠道专属参数，不放在外层
+        from: "FeedWatch <releases@your-verified-domain.com>"
+        to: [you@example.com]
+        api_key_env: RESEND_API_KEY
     - type: wecom
       name: 企业微信群
       options:
@@ -126,7 +131,6 @@ notify:
       options:
         token: ${TELEGRAM_BOT_TOKEN}
         chat_id: ${TELEGRAM_CHAT_ID}
-    - type: email                  # 也可以混搭邮件
 ```
 
 `${ENV_VAR}` 在启动时由程序展开（**只认 `${NAME}`，`$schema` 这类字面量不受影响**），缺失会在启动阶段直接报错并列出变量名；每个渠道的必填项（`webhook_url` / `token` / `chat_id` / 超时与重试参数）也在启动时校验，不会等到第一次轮询才暴露。webhook URL、token、签名密钥都含凭证，**不要写进 YAML、不要提交**；`.env.example` 列出了全部变量，Docker Compose 已把它们透传进容器。
@@ -135,7 +139,7 @@ notify:
 
 | `type` | 渠道 | 必填 options | 可选 options | 成功判定 |
 | --- | --- | --- | --- | --- |
-| `email` | Resend 邮件 | `notify.email.from` / `to`，环境变量 `RESEND_API_KEY` | `cc`、`subject_prefix` | SDK 返回 |
+| `email` | Resend 邮件 | 条目内 `email.from` / `email.to`，环境变量 `RESEND_API_KEY` | `email.cc`、`email.api_key_env`、`options.subject_prefix` | SDK 返回 |
 | `wecom` | 企业微信群机器人 | `webhook_url` | `msg_type`（`markdown` 默认 / `text`）、`mentioned_list`、`mentioned_mobile_list` | HTTP 200 且 `errcode=0` |
 | `feishu` | 飞书自定义机器人 | `webhook_url` | `secret`（签名校验）、`msg_type`（`text` / `card`） | `code=0` |
 | `dingtalk` | 钉钉自定义机器人 | `webhook_url` | `secret`（加签）、`msg_type`（`markdown` 默认 / `text`） | `errcode=0` |
@@ -148,7 +152,7 @@ notify:
 | `webhook` | 通用自定义 Webhook | `webhook_url` | `method`、`content_type`、`body`、`header.<名称>` | 2xx |
 | `log` | 只写日志（本地调试） | — | — | 总是成功 |
 
-所有渠道都共享：`subject_prefix`（默认 `[FeedWatch]`）、`timeout`（默认 10s）、`retry_max`（默认 2）、`retry_base_delay`（默认 500ms）。网络错误、`429`、`5xx` 按指数退避重试，并尊重 `Retry-After`（含 Telegram 的 `parameters.retry_after`）；**厂商业务错误码不会重试**。
+所有渠道都共享：`subject_prefix`（默认 `[FeedWatch]`，全局 `notify.subject_prefix`，可用渠道 `options.subject_prefix` 覆盖）、`timeout`（默认 10s）、`retry_max`（默认 2）、`retry_base_delay`（默认 500ms）。网络错误、`429`、`5xx` 按指数退避重试，并尊重 `Retry-After`（含 Telegram 的 `parameters.retry_after`）；**厂商业务错误码不会重试**。
 
 几个按官方文档处理过的细节：飞书签名是 `HMAC-SHA256(key=timestamp+"\n"+secret, msg="")` 的 base64，字段放在 JSON body；钉钉加签是 `HMAC-SHA256(key=secret, msg=毫秒时间戳+"\n"+secret)`，结果作为 `timestamp` / `sign` **查询参数**（只 urlencode 一次）；企业微信 markdown 上限 4096 字节、文本 2048 字节；Discord `content` 上限 2000 字符并禁用 `@` 解析；Telegram 正文上限 4096 字符，默认用 `HTML`（比 MarkdownV2 少踩转义坑），内容过长时自动退回纯文本以免截断出坏标签；Teams 用 **Adaptive Card**（旧 Office 365 连接器已于 2026 年 5 月退役，URL 请用 Workflows 生成）。
 
@@ -173,7 +177,7 @@ watcher 的语义是「通知返回错误 → 不提交已见集合 → 下轮�
 - `best_effort`（默认）：至少一个渠道成功即提交状态；失败渠道打 `ERROR` 日志并放弃该次推送，不产生重复。适合 IM 群通知。
 - `strict`：任一渠道失败就整体报错重试，保证每个渠道都不漏，代价是可能重复（例如某个群机器人长期失效时，其它群会每轮都收到同一批）。
 
-单通道时两者行为一致：失败就报错重试。
+只配置一个渠道时两者行为一致：失败就报错重试。
 
 ## Docker 部署（WSL 里执行）
 
@@ -250,7 +254,7 @@ CI 会把 tag 通过 `-ldflags "-X main.version=..."` 注入二进制，容器�
 ### 直接使用预构建镜像（服务器无需源码、无需本地编译）
 
 ```bash
-cp config.example.yaml config.yaml    # 填好 notify.email.from / to
+cp config.example.yaml config.yaml    # 填好 channels 里 email 条目的 email.from / to
 docker pull ghcr.io/zsyo/feedwatch:latest
 docker run -d --name feedwatch \
   -e RESEND_API_KEY="re_xxx" \
