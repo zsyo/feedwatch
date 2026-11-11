@@ -1,5 +1,8 @@
 services:
   feedwatch:
+    # Single instance by design (shared state file). A stable short name keeps
+    # `docker logs -f feedwatch` usable instead of feedwatch-feedwatch-1.
+    container_name: feedwatch
     build: .
     image: feedwatch:latest
     # ${VAR:-} is substituted from the .env file in this directory.
