@@ -1,0 +1,101 @@
+name: Publish Docker image (GHCR)
+
+# Only release tags publish an image. Re-running a failed job keeps the same
+# tag ref, so a manual dispatch (which has no semver ref) is intentionally
+# not offered.
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Force-pushing a tag should not leave two builds racing to push the same digest.
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write # required to push to GHCR with GITHUB_TOKEN
+
+    steps:
+      - name: Validate release tag
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$tag' is not semver; use vMAJOR.MINOR.PATCH (e.g. v1.2.3)."
+            exit 1
+          fi
+          echo "Publishing release $tag"
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # The Go build itself is cross-compiled on the native amd64 runner (see
+      # Dockerfile: FROM --platform=$BUILDPLATFORM). QEMU is only needed for
+      # the runtime stage's `apk add` / `adduser` on the arm64 variant.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64,amd64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=auto
+          # v1.2.3 -> 1.2.3, 1.2, latest
+          # v1.2.3-rc.1 -> 1.2.3-rc.1 only (latest is never moved by a prerelease)
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push (linux/amd64 + linux/arm64)
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          # Path context (not the Git context) so .dockerignore is honoured.
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Write job summary
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          TAG: ${{ github.ref_name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### Published to GHCR"
+            echo ""
+            echo "- Image: \`$IMAGE\`"
+            echo "- Tag: \`$TAG\`"
+            echo "- Platforms: linux/amd64, linux/arm64"
+            echo "- Digest: \`$DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"

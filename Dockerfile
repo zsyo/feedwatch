@@ -1,13 +1,24 @@
 # ---- build stage ----
-FROM golang:1.27-alpine AS build
+# Always run the Go toolchain on the builder's native platform and cross-compile
+# for the target. Emulating the whole toolchain under QEMU on a multi-arch CI
+# build would be several times slower (and GOARCH used to be hardcoded here).
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
+# CI passes the release tag; plain `docker build` falls back to "dev".
+ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -ldflags="-s -w" -o /out/feedwatch ./cmd/feedwatch
+# BuildKit injects TARGETOS/TARGETARCH; the fallbacks keep a plain
+# `docker build` (without buildx) working on linux/amd64.
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/feedwatch ./cmd/feedwatch
 
 # ---- runtime stage ----
+# This stage resolves to TARGETPLATFORM. On an amd64 CI runner the arm64
+# variant needs QEMU (setup-qemu-action) for the apk/adduser RUN below.
 FROM alpine:3.21
 # ca-certificates is required for HTTPS to github.com and api.resend.com;
 # tzdata makes the TZ environment variable affect timestamps in emails.

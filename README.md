@@ -112,15 +112,69 @@ docker compose logs -f    # 首次应看到基线邮件已发送
 docker compose restart    # 无新版本时应完全静默
 ```
 
-镜像为多阶段构建（`golang:1.27-alpine` → `alpine:3.21`），静态二进制、非 root 用户、含 CA 证书与时区。配置通过只读挂载传入，状态通过命名卷 `feedwatch-data:/app/data` 持久化。
+镜像为多阶段构建（`golang:1.27-alpine` → `alpine:3.21`），静态二进制、非 root 用户、含 CA 证书与时区；编译阶段用 BuildKit 的 `TARGETOS` / `TARGETARCH` 交叉编译，因此同一份 Dockerfile 可产出 amd64 / arm64 镜像。配置通过只读挂载传入，状态通过命名卷 `feedwatch-data:/app/data` 持久化。
 
 > 镜像内烘焙的是 `config.example.yaml` 的**占位默认值**（不含任何真实域名或收件人），因此干净 clone 也能直接 `docker compose build`；`.dockerignore` 会挡住本地 `config.yaml`，防止私有配置进入镜像层。不带挂载直接 `docker run` 时用的就是这份占位配置，需自行 `-v` 挂真实配置。
 
 > **卷丢了会重发基线邮件**（因为程序会认为这是首次运行）。这是预期行为。若手工 `docker run`，记得 `-e RESEND_API_KEY=... -v feedwatch-data:/app/data`。
 
+## 发布镜像（GitHub Actions / GHCR）
+
+`.github/workflows/docker-publish.yml` 在推送 `v*` tag 时自动构建 **linux/amd64 + linux/arm64** 双架构镜像，发布到 GitHub Container Registry：`ghcr.io/zsyo/feedwatch`。Docker 会按宿主机架构自动挑选 manifest，同一条 `pull` 命令在 x86 服务器和 ARM 板子上都能用。镜像名由 `${{ github.repository }}` 自动生成，fork 后会变成 `ghcr.io/<你的用户名>/feedwatch`，无需改 workflow。
+
+### 发布一个新版本
+
+```bash
+git tag -a v1.2.3 -m "release v1.2.3"
+git push origin v1.2.3
+```
+
+tag 必须是 `vMAJOR.MINOR.PATCH`（允许 `-rc.1` 一类后缀）；格式不对时 workflow 立即报错退出，不会推镜像。
+
+| Git tag | 生成的镜像 tag |
+| --- | --- |
+| `v1.2.3` | `1.2.3`、`1.2`、`latest` |
+| `v1.2.3-rc.1` | `1.2.3-rc.1`（预发布不会移动 `latest`） |
+
+CI 会把 tag 通过 `-ldflags "-X main.version=..."` 注入二进制，容器内 `./feedwatch -version` 能直接看到版本。**无需配置任何额外 secret**：用内置 `GITHUB_TOKEN` + `packages: write` 登录 GHCR，构建缓存走 GitHub Actions cache。
+
+> **首次发布后要做一件事**：GHCR 的 package 默认是 **private**，服务器无法免登录拉取。到仓库右侧 `Packages → feedwatch → Package settings` 把可见性改成 Public；若保持私有，服务器需先 `docker login ghcr.io`（PAT 要有 `read:packages`）。
+
+### 直接使用预构建镜像（服务器无需源码、无需本地编译）
+
+```bash
+cp config.example.yaml config.yaml    # 填好 notify.email.from / to
+docker pull ghcr.io/zsyo/feedwatch:1.2.3
+docker run -d --name feedwatch \
+  -e RESEND_API_KEY="re_xxx" \
+  -v "$PWD/config.yaml:/app/config.yaml:ro" \
+  -v feedwatch-data:/app/data \
+  ghcr.io/zsyo/feedwatch:1.2.3
+```
+
+改用 compose：删掉 `docker-compose.yml` 里的 `build: .`，把 `image` 换成远程镜像，`environment` / `volumes` / `restart` 全部原样保留：
+
+```yaml
+services:
+  feedwatch:
+    image: ghcr.io/zsyo/feedwatch:1.2.3   # 或 :latest
+    # build: .                            # 删除这一行
+```
+
+然后 `docker compose pull && docker compose up -d`。
+
+### 双架构是怎么构建的
+
+`Dockerfile` 编译阶段固定 `FROM --platform=$BUILDPLATFORM`，用 BuildKit 自动注入的 `TARGETOS` / `TARGETARCH` 做 `CGO_ENABLED=0` 交叉编译，Go 工具链始终跑在 runner 原生 amd64 上；QEMU 只负责运行阶段的 `apk add` / `adduser`（arm64 变体），比在 QEMU 里编译整个 Go 工具链快得多。`golang:1.27-alpine` 与 `alpine:3.21` 的官方镜像均含 `arm64v8` 变体。
+
+本地 `docker compose build` 不带 `--platform`，只产出**本机架构**镜像；要复现双架构需 `docker buildx build --platform linux/amd64,linux/arm64 .`（多架构 manifest 只能推到 registry，`--load` 只支持单平台）。Dockerfile 依赖 BuildKit 自动注入的平台变量（Docker 23+ 默认启用）。
+
+> 生产环境建议把 workflow 里的 action 固定到 commit SHA（GitHub 官方安全建议）；当前用的是 major tag：`actions/checkout@v7`、`docker/setup-qemu-action@v4`、`docker/setup-buildx-action@v4`、`docker/login-action@v4`、`docker/metadata-action@v6`、`docker/build-push-action@v7`。
+
 ## 目录结构
 
 ```
+.github/workflows/docker-publish.yml  tag 触发的 GHCR 双架构发布
 cmd/feedwatch/main.go          唯一组合根：注册实现、注入配置、启动调度
 internal/domain/              领域模型（零内部依赖）
 internal/config/              YAML + env 覆盖 + 校验
@@ -158,6 +212,12 @@ gofmt -l ./cmd ./internal
 ```
 
 单元测试用 `httptest` 模拟 feed（200/304/429/5xx/畸形 XML）、临时文件测状态原子写、fake sender 测 Resend 请求、可编程 fake source 覆盖 watcher 的首轮基线 / 重启静默 / 失败重试 / 单 feed 隔离 / 304 语义。**测试不会发出真实邮件**。
+
+改 workflow 后建议跑一次静态检查（需自行安装 `go install github.com/rhysd/actionlint/cmd/actionlint@latest`）：
+
+```bash
+actionlint .github/workflows/docker-publish.yml
+```
 
 ## 已知限制
 
