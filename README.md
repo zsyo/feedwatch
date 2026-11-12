@@ -22,6 +22,7 @@
 | 某个 feed 抓取失败 | 跳过该 feed，其它 feed 正常通知；首轮若有任一 feed 失败则整封基线通知推迟 |
 | HTTP 304 | 不做 diff、不改写已见集合、不发通知 |
 | 预发布 / 非版本标签 | 默认不通知（`go1.27rc3`、`v3.16.0a1`、CPython 的 `3.10` 分支 tag 等），但 ID 仍记为已见 |
+| 状态目录不可写（如 bind mount 权限不对） | **启动即失败**：`jsonfile.New` 在启动期用 `CreateTemp` 探测一次并立刻删除，不会先发通知再发现存不下 |
 
 > 去重只认 Atom `<id>`，不是版本号。GitHub 的 feed 只保留最近约 10 条，长时间停机漏掉的中间版本不会补发——这是预期行为。
 
@@ -192,7 +193,7 @@ docker compose restart    # 无新版本时应完全静默
 
 `docker-compose.yml` 用 `container_name` 把容器名固定为 `feedwatch`，所以也可以直接 `docker logs -f feedwatch`、`docker exec -it feedwatch sh`；上面那些 `docker compose ...` 命令用的是 service 名，不受影响。设置 `container_name` 后该服务不能横向扩容，但本项目共用一份状态文件，本来就只应跑单个实例，没有影响。卷仍是原来的 `feedwatch-data`，改名后重建容器不会丢 `state.json`、不会重发基线通知。
 
-镜像为多阶段构建（`golang:1.27-alpine` → `alpine:3.21`），静态二进制、非 root 用户、含 CA 证书与时区；编译阶段用 BuildKit 的 `TARGETOS` / `TARGETARCH` 交叉编译，因此同一份 Dockerfile 可产出 amd64 / arm64 镜像。配置通过只读挂载传入，各渠道凭证通过 `docker-compose.yml` 的 `environment` 从 `.env` 注入（新增自定义变量时记得在那里补一行），状态通过命名卷 `feedwatch-data:/app/data` 持久化。
+镜像为多阶段构建（`golang:1.27-alpine` → `alpine:3.21`），静态二进制、非 root 用户、含 CA 证书与时区；编译阶段用 BuildKit 的 `TARGETOS` / `TARGETARCH` 交叉编译，因此同一份 Dockerfile 可产出 amd64 / arm64 镜像。配置通过只读挂载传入，各渠道凭证通过 `docker-compose.yml` 的 `environment` 从 `.env` 注入（新增自定义变量时记得在那里补一行），状态通过命名卷 `feedwatch-data:/app/data` 持久化。compose 里的 `user: "${FW_UID:-app}:${FW_GID:-app}"` 默认沿用镜像内的 `app` 用户（与命名卷属主一致）；改成下面的 bind mount 时才需要用宿主机 uid/gid 覆盖。
 
 > 镜像内烘焙的是 `config.example.yaml` 的**占位默认值**（不含任何真实域名或收件人），因此干净 clone 也能直接 `docker compose build`；`.dockerignore` 会挡住本地 `config.yaml`，防止私有配置进入镜像层。不带挂载直接 `docker run` 时用的就是这份占位配置，需自行 `-v` 挂真实配置。
 
@@ -211,14 +212,30 @@ docker compose restart    # 无新版本时应完全静默
 # 顶层 volumes: 段可整段删掉
 ```
 
-容器以非 root 的 `app` 用户运行，宿主机目录得允许它写入，否则状态文件保存会失败（WSL + Docker Desktop 的文件共享通常较宽松，Linux 服务器上必须处理）：
+**bind mount 会保留宿主机目录的属主**：`Dockerfile` 里的 `chown -R app:app /app` 只作用于镜像内，盖不到挂载进来的目录。而状态写入是 `CreateTemp` + `rename`，需要在目录里**创建文件**，所以目录必须对容器用户可写。若目录是 `drwxr-xr-x docker:docker`，容器内的 `app` 落在 others 上只有 `r-x`，就会 `permission denied` → 状态永远存不下 → 每轮都判定首轮并**重发基线通知**（Linux 服务器必现，WSL + Docker Desktop 的文件共享通常较宽松）。
+
+推荐做法是**不动宿主机权限**，让容器以该目录属主的身份运行。`docker-compose.yml` 已经设好 `user: "${FW_UID:-app}:${FW_GID:-app}"`，把宿主机 uid/gid 传进去即可：
+
+先确认目录属主就是当前登录用户：`stat -c '%u:%g' data` 应与 `id -u`:`id -g` 一致。若目录属主是别的用户（例如 `docker:docker`），就把**那一对数字**写进 `.env` 的 `FW_UID` / `FW_GID`，或先 `chown` 给当前用户——`$(id -u)` 取的是执行命令的人，不是目录属主，两者不一致时照样会 `permission denied`。
 
 ```bash
 mkdir -p data
-chmod 777 data                        # 或更精确：sudo chown <uid>:<gid> data
+
+# 方式一（推荐）：写进 .env，之后任意终端执行 compose 都一致
+printf 'FW_UID=%s\nFW_GID=%s\n' "$(id -u)" "$(id -g)" >> .env
 docker compose up -d
-docker compose exec feedwatch id       # 查容器内实际 uid/gid 后再精确授权
+
+# 方式二：只对本次命令生效（shell 先展开 $(...)，再作为环境变量传给 compose）
+FW_UID=$(id -u) FW_GID=$(id -g) docker compose up -d
 ```
+
+> **Compose 不会执行 `$(...)`**：它只做 `${VAR}` 插值，把 `user: "$(id -u):$(id -g)"` 写进 YAML 会被当成字面字符串、导致容器启动失败。所以 `.env` 里必须是展开后的**数字**，上面的 `printf` 就是干这个的。另外别用变量名 `UID`——bash/zsh 里 `UID` 是只读 shell 变量，`UID=$(id -u)` 会报 `readonly variable`，因此这里用 `FW_UID` / `FW_GID`。两者只在宿主机侧用于 Compose 插值，**不会**传入容器。
+>
+> 两者都不设置时 `user` 为 `app:app`，等价于镜像的 `USER app`，正好匹配默认命名卷的属主，所以默认的命名卷部署方式完全不受影响。
+
+两条备选：保持默认用户而给目录授权（`sudo chown <容器内 app 的 uid>:<gid> data`，或 `chmod 777 data`——所有用户可写，不推荐）；或在 compose 里把 `user` 写死成具体数字。自定义 compose 文件时，同样只需在 service 下加 `user: "1000:1000"`（换成宿主机实际值）。
+
+**配错会在启动期就被拦住**：`jsonfile.New` 在建 store 时先用 `CreateTemp` 在状态目录探测一次并立即删除，不可写就直接启动失败（`state directory ... is not writable`），不会先发出基线邮件才发现存不下。所以现在看到的是启动报错 + 容器反复重启，而不是每半小时一封重复通知。
 
 `data/` 已在 `.gitignore` 中，不会进仓库。
 
@@ -265,9 +282,25 @@ docker run -d --name feedwatch \
   ghcr.io/zsyo/feedwatch:latest
 ```
 
+> 用命名卷时**不要**加 `--user`：Docker 会用镜像内 `/app/data` 的属主初始化空卷，正好是 `app` 用户；强行指定宿主机 uid 反而会写不进去。
+
+想把状态放在宿主机目录，改用 bind mount 并把容器用户设成该目录的属主。`docker run` 由 shell 展开 `$(...)`，可以直接写：
+
+```bash
+mkdir -p data
+docker run -d --name feedwatch \
+  --user "$(id -u):$(id -g)" \
+  -e RESEND_API_KEY="re_xxx" \
+  -v "$PWD/config.yaml:/app/config.yaml:ro" \
+  -v "$PWD/data:/app/data" \
+  ghcr.io/zsyo/feedwatch:latest
+```
+
+`--user "$(id -u):$(id -g)"` 与 compose 里的 `FW_UID` / `FW_GID` 覆盖等价；同样要求当前用户就是 `data/` 的属主，原理见上一节。
+
 > 用多通道时，把对应的 `-e WECOM_WEBHOOK_URL=...`、`-e TELEGRAM_BOT_TOKEN=...` 等一并加进 `docker run`（或写进 compose 的 `environment`）；漏掉的变量会在启动日志里直接报出名字。
 
-改用 compose：删掉 `docker-compose.yml` 里的 `build: .`，把 `image` 换成远程镜像，`environment` / `volumes` / `restart` 全部原样保留：
+改用 compose：删掉 `docker-compose.yml` 里的 `build: .`，把 `image` 换成远程镜像，`environment` / `volumes` / `restart` / `user` 全部原样保留：
 
 ```yaml
 services:
@@ -302,7 +335,7 @@ internal/notifier/email/      Resend 实现
 internal/notifier/log/        日志通知器（本地调试 / dry-run）
 internal/notifier/webhook/    共享 HTTP 引擎 + 10 个渠道 Adapter（每个渠道一个文件）
 internal/store/               StateStore 接口 / Registry
-internal/store/jsonfile/      JSON 原子写状态
+internal/store/jsonfile/      JSON 原子写状态 + 启动期可写性预检
 internal/watcher/             核心编排：抓取 → 过滤 → diff → 通知 → 提交
 testdata/                     测试用 feed 夹具
 ```

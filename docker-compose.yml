@@ -5,6 +5,16 @@ services:
     container_name: feedwatch
     build: .
     image: feedwatch:latest
+    # The image runs as the unprivileged "app" user; keep it by default, which
+    # matches the ownership Docker gives the named volume below.
+    # If /app/data is changed to a BIND MOUNT (e.g. ./data), the host directory
+    # keeps its host owner and the container can no longer write state.json.
+    # Override with the host uid:gid in that case, no chmod/chown needed:
+    #   FW_UID=$(id -u) FW_GID=$(id -g) docker compose up -d
+    # Compose only interpolates ${VAR}; it does NOT execute $(...), so .env
+    # must hold plain numbers (see .env.example). These two are Compose-side
+    # variables and are NOT passed into the container's environment.
+    user: "${FW_UID:-app}:${FW_GID:-app}"
     # ${VAR:-} is substituted from the .env file in this directory.
     # Copy .env.example -> .env and fill in only the channels you enable.
     # Quote values containing & or ? in .env (e.g. WECOM_WEBHOOK_URL="...?key=x&y=z").

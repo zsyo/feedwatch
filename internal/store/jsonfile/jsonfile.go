@@ -28,10 +28,41 @@ func New(spec store.StoreSpec, log *slog.Logger) (store.StateStore, error) {
 	if p == "" || p == "." {
 		return nil, errors.New("jsonfile: empty state path")
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	dir := filepath.Dir(p)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("jsonfile: create state directory: %w", err)
 	}
+	// Fail at startup, before the watcher sends anything. Save() writes via
+	// CreateTemp + Rename, which needs write permission on the *directory*
+	// even when state.json itself is writable. A bind-mounted host directory
+	// owned by another uid is the usual cause on Linux (the image runs as an
+	// unprivileged "app" user). Without this check every poll would send the
+	// baseline again and only then discover the state cannot be saved.
+	if err := probeWritableDir(dir, os.CreateTemp); err != nil {
+		return nil, err
+	}
 	return &Store{path: p, log: log}, nil
+}
+
+// probeWritableDir performs the exact filesystem operation Save() relies on
+// and removes the probe file immediately, leaving the directory untouched.
+// createTemp is passed in so the error path can be tested on every OS.
+func probeWritableDir(dir string, createTemp func(string, string) (*os.File, error)) error {
+	f, err := createTemp(dir, ".state-probe-*.tmp")
+	if err != nil {
+		return fmt.Errorf("jsonfile: state directory %s is not writable: %w "+
+			"(bind mount? run the container as the directory owner, e.g. "+
+			"`--user \"$(id -u):$(id -g)\"`, or fix the directory permissions)", dir, err)
+	}
+	name := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name) // best effort; the original error is more useful
+		return fmt.Errorf("jsonfile: close probe file in %s: %w", dir, err)
+	}
+	if err := os.Remove(name); err != nil {
+		return fmt.Errorf("jsonfile: remove probe file in %s: %w", dir, err)
+	}
+	return nil
 }
 
 func (s *Store) Load(ctx context.Context) (domain.SeenState, error) {

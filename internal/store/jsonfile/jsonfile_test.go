@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +25,62 @@ func newStore(t *testing.T) (*Store, string) {
 		t.Fatalf("New: %v", err)
 	}
 	return s.(*Store), path
+}
+
+func TestNewFailsFastWhenStateDirIsNotWritable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permission bits are not enforced on Windows")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	// Restore before t.TempDir's own RemoveAll cleanup (cleanups run LIFO).
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	// root ignores mode bits; detect that instead of failing in a root CI job.
+	if f, err := os.CreateTemp(dir, ".check-*"); err == nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		t.Skip("running as root: directory mode bits do not restrict writes")
+	}
+
+	_, err := New(store.StoreSpec{Type: "jsonfile", Path: filepath.Join(dir, "state.json")}, slog.Default())
+	if err == nil {
+		t.Fatal("New must fail at startup when the state directory is not writable")
+	}
+	if !strings.Contains(err.Error(), "not writable") {
+		t.Fatalf("error should explain the unwritable directory: %v", err)
+	}
+}
+
+func TestNewProbeLeavesNoTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := New(store.StoreSpec{Type: "jsonfile", Path: filepath.Join(dir, "state.json")}, slog.Default()); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("probe left files behind: %v", entries)
+	}
+}
+
+func TestProbeErrorExplainsUnwritableDir(t *testing.T) {
+	want := errors.New("permission denied")
+	err := probeWritableDir("/app/data", func(string, string) (*os.File, error) {
+		return nil, want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("probe must wrap the underlying error, got %v", err)
+	}
+	for _, hint := range []string{"not writable", "/app/data", "--user", "id -u"} {
+		if !strings.Contains(err.Error(), hint) {
+			t.Errorf("error %q should mention %q", err, hint)
+		}
+	}
 }
 
 func TestLoadMissingReturnsErrNotFound(t *testing.T) {
