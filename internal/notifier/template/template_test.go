@@ -62,6 +62,42 @@ func TestRenderNewReleases(t *testing.T) {
 	}
 }
 
+// per_feed batches set Scope so the subject names the project; digest and
+// baseline notifications must keep their original wording.
+func TestSubjectUsesScopeForPerFeedBatches(t *testing.T) {
+	n := sample(domain.KindNewReleases, 2)
+	n.Scope = "golang/go"
+	r, err := Render(n, "[FeedWatch]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Subject != "[FeedWatch] golang/go 发现 2 个新版本：go1.27.0、go1.27.1" {
+		t.Errorf("subject = %q", r.Subject)
+	}
+	if !strings.Contains(r.HTML, "发现新版本 · golang/go") {
+		t.Errorf("heading should name the project too: %q", r.HTML)
+	}
+
+	n.Scope = ""
+	plain, err := Render(n, "[FeedWatch]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plain.Subject, "golang/go") {
+		t.Errorf("digest subject must stay project-agnostic: %q", plain.Subject)
+	}
+
+	baseline := sample(domain.KindBaseline, 2)
+	baseline.Scope = "golang/go"
+	base, err := Render(baseline, "[FeedWatch]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(base.Subject, "golang/go") {
+		t.Errorf("baseline is always one summary, got %q", base.Subject)
+	}
+}
+
 func TestSubjectTruncatesLongLists(t *testing.T) {
 	r, err := Render(sample(domain.KindNewReleases, 5), "[FW]")
 	if err != nil {

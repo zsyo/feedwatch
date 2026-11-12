@@ -3,14 +3,17 @@ package watcher
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"feedwatch/internal/domain"
 	"feedwatch/internal/filter"
+	"feedwatch/internal/notifier"
 	"feedwatch/internal/source"
 	"feedwatch/internal/store"
 )
@@ -116,6 +119,53 @@ func (r *recordingNotifier) Send(_ context.Context, n domain.Notification) error
 	return nil
 }
 
+// selectiveNotifier fails only one per_feed batch, so partial-failure
+// semantics can be tested with two feeds in a single cycle.
+type selectiveNotifier struct {
+	notes     []domain.Notification
+	failScope string
+}
+
+func (r *selectiveNotifier) Type() string { return "selective" }
+
+func (r *selectiveNotifier) Send(_ context.Context, n domain.Notification) error {
+	r.notes = append(r.notes, n)
+	if r.failScope != "" && n.Scope == r.failScope {
+		return errors.New("send failed")
+	}
+	return nil
+}
+
+// trackingSource records how many Fetch calls overlap.
+type trackingSource struct {
+	inFlight atomic.Int64
+	peak     atomic.Int64
+	calls    atomic.Int64
+}
+
+func (s *trackingSource) Type() string { return "tracking" }
+
+func (s *trackingSource) Fetch(context.Context, source.Cursor) (source.Result, error) {
+	s.calls.Add(1)
+	cur := s.inFlight.Add(1)
+	for {
+		old := s.peak.Load()
+		if cur <= old || s.peak.CompareAndSwap(old, cur) {
+			break
+		}
+	}
+	time.Sleep(5 * time.Millisecond)
+	s.inFlight.Add(-1)
+	return res(rel("id-v1", "v1.2.3", fixedNow)), nil
+}
+
+func twoFeedStore() *memStore {
+	st := domain.NewSeenState()
+	st.EnsureFeed("golang/go")
+	st.EnsureFeed("rust-lang/rust")
+	return &memStore{state: st, exists: true}
+}
+
 // existingStore builds a state that already contains the given seen IDs,
 // simulating a container restart with an intact volume.
 func existingStore(seen ...string) *memStore {
@@ -129,7 +179,7 @@ func existingStore(seen ...string) *memStore {
 	return &memStore{state: st, exists: true}
 }
 
-func newWatcher(st *memStore, n *recordingNotifier, mode string, tasks ...FeedTask) *Watcher {
+func newWatcher(st *memStore, n notifier.Notifier, mode string, tasks ...FeedTask) *Watcher {
 	w := New(tasks, st, n, Options{
 		Interval: time.Hour, Timeout: 5 * time.Second, RunOnStart: true, NotifyMode: mode,
 	}, quiet())
@@ -278,11 +328,16 @@ func TestNewReleaseSendFailureIsRetried(t *testing.T) {
 	if err := w.RunOnce(context.Background()); err == nil {
 		t.Fatal("notification failure should be returned")
 	}
-	if st.saveCalls != 0 {
-		t.Fatal("state must not be committed after a failed notification")
+	// The state file is still written (so other feeds' progress is not lost),
+	// but the failed feed must stay completely uncommitted.
+	if st.saveCalls != 1 {
+		t.Fatalf("expected one partial state write, got %d", st.saveCalls)
 	}
 	if _, ok := st.state.Feeds["golang/go"].SeenIDs["id-v2"]; ok {
 		t.Fatal("new id must stay unseen so it is retried")
+	}
+	if got := st.state.Feeds["golang/go"].ETag; got != `"old"` {
+		t.Fatalf("failed feed ETag was committed as %q; the next 304 would swallow the retry", got)
 	}
 
 	n.fail = false
@@ -292,8 +347,8 @@ func TestNewReleaseSendFailureIsRetried(t *testing.T) {
 	if len(n.notes) != 1 || n.notes[0].Items[0].Version != "v1.2.4" {
 		t.Errorf("retry produced wrong mails: %+v", n.notes)
 	}
-	if st.saveCalls != 1 {
-		t.Errorf("expected one commit after the successful retry, got %d", st.saveCalls)
+	if st.saveCalls != 2 {
+		t.Errorf("expected a second commit after the successful retry, got %d", st.saveCalls)
 	}
 }
 
@@ -430,6 +485,143 @@ func TestPerFeedModeGroupsNotifications(t *testing.T) {
 		if len(note.Items) != 1 {
 			t.Errorf("each per_feed mail should hold one project's items: %+v", note.Items)
 		}
+	}
+}
+
+func TestPerFeedBatchesCarryScope(t *testing.T) {
+	st := twoFeedStore()
+	n := &recordingNotifier{}
+	w := newWatcher(st, n, "per_feed",
+		stableTask("golang/go", step{result: res(rel("id-go", "go1.27.4", fixedNow))}),
+		stableTask("rust-lang/rust", step{result: res(rel("id-rust", "1.99.2", fixedNow))}),
+	)
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"golang/go": false, "rust-lang/rust": false}
+	for _, note := range n.notes {
+		if note.Scope == "" || note.Items[0].Feed != note.Scope {
+			t.Errorf("per_feed batch missing a matching Scope: %+v", note)
+		}
+		want[note.Scope] = true
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Errorf("missing batch for %s", name)
+		}
+	}
+}
+
+func TestBaselineStaysOneSummaryUnderPerFeed(t *testing.T) {
+	st := &memStore{} // first run
+	n := &recordingNotifier{}
+	w := newWatcher(st, n, "per_feed",
+		stableTask("golang/go", step{result: res(rel("id-go", "go1.27.4", fixedNow))}),
+		stableTask("rust-lang/rust", step{result: res(rel("id-rust", "1.99.2", fixedNow))}),
+	)
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.notes) != 1 || n.notes[0].Kind != domain.KindBaseline ||
+		n.notes[0].Scope != "" || len(n.notes[0].Items) != 2 {
+		t.Fatalf("baseline must stay one scope-free summary: %+v", n.notes)
+	}
+}
+
+// A failing per_feed batch used to abort the whole cycle, so the next cycle
+// re-sent EVERY project. Now only the failed feed is held back.
+func TestPerFeedPartialFailureOnlyRetriesFailedFeed(t *testing.T) {
+	st := twoFeedStore()
+	n := &selectiveNotifier{failScope: "rust-lang/rust"}
+	w := newWatcher(st, n, "per_feed",
+		stableTask("golang/go", step{result: res(rel("id-go", "go1.27.4", fixedNow))}),
+		stableTask("rust-lang/rust", step{result: res(rel("id-rust", "1.99.2", fixedNow))}),
+	)
+
+	if err := w.RunOnce(context.Background()); err == nil {
+		t.Fatal("a failed batch must surface as an error")
+	}
+	if len(n.notes) != 2 {
+		t.Fatalf("all batches should still be attempted, got %d", len(n.notes))
+	}
+	goFS, rustFS := st.state.Feeds["golang/go"], st.state.Feeds["rust-lang/rust"]
+	if _, ok := goFS.SeenIDs["id-go"]; !ok {
+		t.Error("successfully delivered feed must be committed")
+	}
+	if goFS.ETag != `"e-1"` {
+		t.Errorf("delivered feed should keep the new ETag, got %q", goFS.ETag)
+	}
+	if _, ok := rustFS.SeenIDs["id-rust"]; ok {
+		t.Error("failed feed must stay unseen so it can be retried")
+	}
+	if rustFS.ETag != "" {
+		t.Errorf("failed feed must keep its old ETag, got %q", rustFS.ETag)
+	}
+	if st.saveCalls != 1 {
+		t.Errorf("partial progress must be persisted, got %d saves", st.saveCalls)
+	}
+
+	// Next cycle: only the previously failed feed is notified. No duplicates
+	// for golang/go, which already delivered.
+	n.failScope = ""
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.notes) != 3 {
+		t.Fatalf("expected exactly one retry mail, got %d notes total", len(n.notes))
+	}
+	retry := n.notes[2]
+	if retry.Scope != "rust-lang/rust" || len(retry.Items) != 1 || retry.Items[0].Version != "1.99.2" {
+		t.Errorf("wrong retry batch: %+v", retry)
+	}
+	if _, ok := st.state.Feeds["rust-lang/rust"].SeenIDs["id-rust"]; !ok {
+		t.Error("retry should commit the previously failed feed")
+	}
+}
+
+func TestFetchConcurrencyIsBounded(t *testing.T) {
+	const feeds, limit = 8, 3
+	tracker := &trackingSource{}
+	tasks := make([]FeedTask, 0, feeds)
+	for i := range feeds {
+		tasks = append(tasks, FeedTask{Name: fmt.Sprintf("feed-%d", i), Source: tracker})
+	}
+	st := &memStore{}
+	n := &recordingNotifier{}
+	w := New(tasks, st, n, Options{
+		Interval: time.Hour, Timeout: 5 * time.Second,
+		FetchConcurrency: limit, FetchSpacing: 0,
+	}, quiet())
+	w.now = func() time.Time { return fixedNow }
+
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := tracker.calls.Load(); got != feeds {
+		t.Errorf("fetched %d feeds, want %d", got, feeds)
+	}
+	if got := tracker.peak.Load(); got > limit {
+		t.Errorf("peak concurrent fetches = %d, want <= %d", got, limit)
+	} else if got < 2 {
+		t.Errorf("expected real parallelism, peak was %d", got)
+	}
+	if len(n.notes) != 1 || n.notes[0].Kind != domain.KindBaseline {
+		t.Errorf("parallel fetch should still produce one baseline: %+v", n.notes)
+	}
+}
+
+func TestFetchGateWiring(t *testing.T) {
+	w := newWatcher(&memStore{}, &recordingNotifier{}, "digest")
+	if w.fetchGate.Concurrency() != 1 || w.fetchGate.Spacing() != 0 {
+		t.Errorf("default should stay serial and unthrottled: %d / %v",
+			w.fetchGate.Concurrency(), w.fetchGate.Spacing())
+	}
+	w2 := New(nil, &memStore{}, &recordingNotifier{}, Options{
+		Interval: time.Hour, Timeout: time.Second,
+		FetchConcurrency: 5, FetchSpacing: 30 * time.Millisecond,
+	}, quiet())
+	if w2.fetchGate.Concurrency() != 5 || w2.fetchGate.Spacing() != 30*time.Millisecond {
+		t.Errorf("fetch limits not wired: %d / %v", w2.fetchGate.Concurrency(), w2.fetchGate.Spacing())
 	}
 }
 

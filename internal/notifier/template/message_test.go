@@ -47,6 +47,21 @@ func TestRenderMessageAllRepresentations(t *testing.T) {
 	}
 }
 
+func TestRenderMessageSubjectKeepsPerFeedScope(t *testing.T) {
+	n := chatNote()
+	n.Scope = "golang/go"
+	m, err := RenderMessage(n, "[FeedWatch]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(m.Subject, "[FeedWatch] golang/go ") {
+		t.Errorf("chat subject lost the project name: %q", m.Subject)
+	}
+	if !strings.Contains(m.Markdown, "golang/go 发现") || !strings.Contains(m.HTML, "golang/go 发现") {
+		t.Errorf("chat bodies should reuse the scoped subject:\nmd=%s\nhtml=%s", m.Markdown, m.HTML)
+	}
+}
+
 func TestRenderMessageBaselineAndUnknownKind(t *testing.T) {
 	n := chatNote()
 	n.Kind = domain.KindBaseline

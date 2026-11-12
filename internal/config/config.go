@@ -44,6 +44,11 @@ type PollConfig struct {
 	Interval   Duration `yaml:"interval"`
 	RunOnStart bool     `yaml:"run_on_start"`
 	Timeout    Duration `yaml:"timeout"`
+	// Concurrency caps simultaneous feed fetches; RequestSpacing paces the
+	// start of each request. Both exist so a config with many feeds (often on
+	// the same host, e.g. github.com) cannot burst the upstream.
+	Concurrency    int      `yaml:"concurrency"`
+	RequestSpacing Duration `yaml:"request_spacing"`
 }
 
 type HTTPConfig struct {
@@ -67,7 +72,10 @@ type StoreConfig struct {
 // notifications one cycle produces), not a per-channel option. Keeping it
 // here mirrors the top of config.example.yaml.
 type NotifyConfig struct {
-	Mode             string            `yaml:"mode"` // global, channel-independent
+	Mode string `yaml:"mode"` // global, channel-independent
+	// SendSpacing paces every channel delivery across all batches. It matters
+	// most for per_feed mode, where one cycle can produce many notifications.
+	SendSpacing      Duration          `yaml:"send_spacing"`
 	SubjectPrefix    string            `yaml:"subject_prefix"`
 	Options          map[string]string `yaml:"options"`
 	Channels         []ChannelConfig   `yaml:"channels"`
@@ -122,6 +130,10 @@ type EmailConfig struct {
 const (
 	DefaultSubjectPrefix = "[FeedWatch]"
 	DefaultAPIKeyEnv     = "RESEND_API_KEY"
+	// Resend accepts at most 50 addresses in a single "to" field. All
+	// recipients are sent in ONE API call, so exceeding this would otherwise
+	// fail on every poll cycle with an opaque 400.
+	MaxEmailRecipients = 50
 )
 
 type LogConfig struct {
@@ -172,9 +184,11 @@ type Overrides struct {
 func Default() Config {
 	return Config{
 		Poll: PollConfig{
-			Interval:   Duration(30 * time.Minute),
-			RunOnStart: true,
-			Timeout:    Duration(2 * time.Minute),
+			Interval:       Duration(30 * time.Minute),
+			RunOnStart:     true,
+			Timeout:        Duration(2 * time.Minute),
+			Concurrency:    4,
+			RequestSpacing: Duration(100 * time.Millisecond),
 		},
 		HTTP: HTTPConfig{
 			Timeout:        Duration(15 * time.Second),
@@ -186,6 +200,7 @@ func Default() Config {
 		Store: StoreConfig{Type: "jsonfile", Path: "data/state.json"},
 		Notify: NotifyConfig{
 			Mode:             "digest",
+			SendSpacing:      Duration(250 * time.Millisecond),
 			SubjectPrefix:    DefaultSubjectPrefix,
 			OnPartialFailure: "best_effort",
 		},
@@ -244,6 +259,15 @@ func (c Config) Validate(dryRun bool) error {
 	if c.Store.Type == "" || c.Store.Path == "" {
 		return fmt.Errorf("store.type and store.path are required")
 	}
+	if c.Poll.Concurrency < 1 {
+		return fmt.Errorf("poll.concurrency must be at least 1, got %d", c.Poll.Concurrency)
+	}
+	if c.Poll.RequestSpacing.D() < 0 {
+		return fmt.Errorf("poll.request_spacing must not be negative")
+	}
+	if c.Notify.SendSpacing.D() < 0 {
+		return fmt.Errorf("notify.send_spacing must not be negative")
+	}
 	if c.Notify.Mode != "digest" && c.Notify.Mode != "per_feed" {
 		return fmt.Errorf("notify.mode must be digest or per_feed, got %q", c.Notify.Mode)
 	}
@@ -276,6 +300,10 @@ func (c Config) Validate(dryRun bool) error {
 		}
 		if len(e.To) == 0 {
 			return fmt.Errorf("notify.channels[%d].email.to must contain at least one recipient", i)
+		}
+		if len(e.To) > MaxEmailRecipients {
+			return fmt.Errorf("notify.channels[%d].email.to has %d recipients, Resend allows at most %d per email (split into several email channels)",
+				i, len(e.To), MaxEmailRecipients)
 		}
 		keyEnv := e.APIKeyEnv
 		if keyEnv == "" {

@@ -11,9 +11,10 @@ import (
 )
 
 // FailurePolicy decides what a partial fan-out failure means to the watcher.
-// The watcher treats any error as "do not commit seen IDs, retry next cycle",
-// so returning an error here re-sends to *every* channel, including the ones
-// that already delivered successfully.
+// The watcher treats an error from ONE notification as "do not commit the
+// feeds in that batch, retry those feeds next cycle"; other batches are still
+// committed. Retrying a batch re-sends it to *every* channel, including the
+// ones that already delivered successfully.
 type FailurePolicy string
 
 const (

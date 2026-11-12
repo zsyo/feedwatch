@@ -72,6 +72,30 @@ func TestSendBuildsResendRequest(t *testing.T) {
 	}
 }
 
+// Multiple recipients are merged into ONE Resend API call: the whole To/Cc
+// slice goes into a single SendEmailRequest, not one request per address.
+func TestSendMergesAllRecipientsIntoOneCall(t *testing.T) {
+	f := &fakeSender{}
+	s := spec()
+	s.To = []string{"a@example.com", "b@example.com", "c@example.com"}
+	s.Cc = []string{"cc1@example.com", "cc2@example.com"}
+	n := newWithSender(f, s, quiet())
+	if err := n.Send(context.Background(), domain.Notification{
+		Kind: domain.KindNewReleases,
+		Items: []domain.ReleaseItem{{
+			Feed: "golang/go", Version: "go1.27.4", URL: "https://example.com/r", IsNew: true,
+		}},
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if f.calls != 1 {
+		t.Fatalf("want exactly ONE API call for %d recipients, got %d", len(s.To)+len(s.Cc), f.calls)
+	}
+	if len(f.params.To) != 3 || f.params.To[2] != "c@example.com" || len(f.params.Cc) != 2 {
+		t.Errorf("recipients were split or lost: to=%v cc=%v", f.params.To, f.params.Cc)
+	}
+}
+
 func TestSendErrorIsPropagated(t *testing.T) {
 	f := &fakeSender{err: errors.New("resend 500")}
 	n := newWithSender(f, spec(), quiet())

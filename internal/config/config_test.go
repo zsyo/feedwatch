@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,7 +47,11 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if c.Store.Type != "jsonfile" || c.Store.Path != "data/state.json" {
 		t.Errorf("unexpected store defaults: %+v", c.Store)
 	}
-	if c.Notify.Mode != "digest" || c.Notify.SubjectPrefix != "[FeedWatch]" {
+	if c.Poll.Concurrency != 4 || c.Poll.RequestSpacing.D() != 100*time.Millisecond {
+		t.Errorf("unexpected fetch rate-limit defaults: %+v", c.Poll)
+	}
+	if c.Notify.Mode != "digest" || c.Notify.SubjectPrefix != "[FeedWatch]" ||
+		c.Notify.SendSpacing.D() != 250*time.Millisecond {
 		t.Errorf("unexpected notify defaults: %+v", c.Notify)
 	}
 	if len(c.Feeds) != 1 || !c.Feeds[0].Enabled {
@@ -138,6 +143,9 @@ func TestValidateRejectsBadConfig(t *testing.T) {
 		{"duplicate name", minimalYAML + "  - name: golang/go\n    type: atom\n    url: https://example.com/a.atom\n", "duplicate feed name"},
 		{"bad url", "notify:\n  channels:\n    - type: log\nfeeds:\n  - name: x\n    type: atom\n    url: ftp://x\n", "must start with http"},
 		{"bad mode", "notify:\n  mode: hourly\n  channels:\n    - type: log\n" + validFeeds, "must be digest or per_feed"},
+		{"bad concurrency", "poll:\n  concurrency: 0\n" + minimalYAML, "poll.concurrency"},
+		{"negative request spacing", "poll:\n  request_spacing: -1s\n" + minimalYAML, "poll.request_spacing"},
+		{"negative send spacing", "notify:\n  send_spacing: -1s\n  channels:\n    - type: log\n" + validFeeds, "notify.send_spacing"},
 		{"no channels", "notify:\n  mode: digest\n" + validFeeds, "notify.channels needs at least one enabled channel"},
 		{"removed type form", "notify:\n  type: email\n" + validFeeds, "old notify.type form was removed"},
 	}
@@ -171,6 +179,45 @@ notify:
 	t.Setenv("RESEND_API_KEY", "re_test")
 	if _, err := Load(p, Overrides{}); err != nil {
 		t.Fatalf("expected success with API key set: %v", err)
+	}
+}
+
+func TestRateLimitOverridesAreRead(t *testing.T) {
+	body := `
+poll:
+  concurrency: 8
+  request_spacing: 500ms
+notify:
+  send_spacing: 1s
+  channels:
+    - type: log
+` + validFeeds
+	c, err := Load(writeConfig(t, body), Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Poll.Concurrency != 8 || c.Poll.RequestSpacing.D() != 500*time.Millisecond ||
+		c.Notify.SendSpacing.D() != time.Second {
+		t.Errorf("rate-limit overrides lost: poll=%+v notify=%+v", c.Poll, c.Notify)
+	}
+}
+
+func TestEmailRecipientLimitFailsFast(t *testing.T) {
+	to := make([]string, MaxEmailRecipients+1)
+	for i := range to {
+		to[i] = fmt.Sprintf("u%d@example.com", i)
+	}
+	body := `
+notify:
+  channels:
+    - type: email
+      email:
+        from: "FeedWatch <noreply@example.com>"
+        to: [` + strings.Join(to, ", ") + `]
+` + validFeeds
+	_, err := Load(writeConfig(t, body), Overrides{DryRun: true})
+	if err == nil || !strings.Contains(err.Error(), "at most 50") {
+		t.Fatalf("want a fail-fast recipient-limit error, got %v", err)
 	}
 }
 

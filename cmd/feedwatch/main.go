@@ -22,6 +22,7 @@ import (
 	emailnotify "feedwatch/internal/notifier/email"
 	lognotify "feedwatch/internal/notifier/log"
 	webhooknotify "feedwatch/internal/notifier/webhook"
+	"feedwatch/internal/pace"
 	"feedwatch/internal/source"
 	atomsource "feedwatch/internal/source/atom"
 	"feedwatch/internal/store"
@@ -138,11 +139,19 @@ func channelSpecs(cfg config.Config) ([]notifier.NotifierSpec, error) {
 }
 
 func buildNotifier(cfg config.Config, reg *notifier.Registry, dryRun bool, log *slog.Logger) (notifier.Notifier, error) {
+	// One gate is shared by EVERY channel: a cycle with many per_feed batches
+	// and several channels cannot burst an IM/email API. Concurrency 1 keeps
+	// deliveries serial (as before); the spacing is the new, explicit cap.
+	sendGate := pace.New(1, cfg.Notify.SendSpacing.D())
 	if dryRun {
 		// Dry-run replaces the entire fan-out, so no channel can send for real.
-		return reg.Build(notifier.NotifierSpec{
+		n, err := reg.Build(notifier.NotifierSpec{
 			Type: "log", SubjectPrefix: cfg.Notify.SubjectPrefix,
 		}, log)
+		if err != nil {
+			return nil, err
+		}
+		return notifier.Pace(n, sendGate), nil
 	}
 	specs, err := channelSpecs(cfg)
 	if err != nil {
@@ -154,7 +163,7 @@ func buildNotifier(cfg config.Config, reg *notifier.Registry, dryRun bool, log *
 		if err != nil {
 			return nil, fmt.Errorf("build notifier %q: %w", sp.Type, err)
 		}
-		built = append(built, n)
+		built = append(built, notifier.Pace(n, sendGate))
 	}
 	if len(built) == 1 {
 		return built[0], nil
@@ -225,6 +234,8 @@ func run() error {
 	}
 	log.Info("feedwatch starting",
 		"version", version, "feeds", enabled, "interval", cfg.Poll.Interval.String(),
+		"fetch_concurrency", cfg.Poll.Concurrency, "request_spacing", cfg.Poll.RequestSpacing.String(),
+		"send_spacing", cfg.Notify.SendSpacing.String(), "notify_mode", cfg.Notify.Mode,
 		"notify", notifyLabel(cfg, *dryRun), "dry_run", *dryRun, "state", cfg.Store.Path)
 	if *dryRun {
 		log.Info("dry-run mode: notifications are only written to the log; state is isolated")
@@ -281,10 +292,12 @@ func run() error {
 	}
 
 	w := watcher.New(tasks, st, n, watcher.Options{
-		Interval:   cfg.Poll.Interval.D(),
-		Timeout:    cfg.Poll.Timeout.D(),
-		RunOnStart: cfg.Poll.RunOnStart,
-		NotifyMode: cfg.Notify.Mode,
+		Interval:         cfg.Poll.Interval.D(),
+		Timeout:          cfg.Poll.Timeout.D(),
+		RunOnStart:       cfg.Poll.RunOnStart,
+		NotifyMode:       cfg.Notify.Mode,
+		FetchConcurrency: cfg.Poll.Concurrency,
+		FetchSpacing:     cfg.Poll.RequestSpacing.D(),
 	}, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

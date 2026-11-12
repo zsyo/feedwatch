@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"feedwatch/internal/domain"
 	"feedwatch/internal/filter"
 	"feedwatch/internal/notifier"
+	"feedwatch/internal/pace"
 	"feedwatch/internal/source"
 	"feedwatch/internal/store"
 )
@@ -28,15 +30,21 @@ type Options struct {
 	Timeout    time.Duration
 	RunOnStart bool
 	NotifyMode string // "digest" (default) | "per_feed"
+	// FetchConcurrency caps simultaneous feed requests; 1 (the default) keeps
+	// the original fully serial behaviour. FetchSpacing additionally paces the
+	// START of each request, which caps the aggregate rate against one host.
+	FetchConcurrency int
+	FetchSpacing     time.Duration
 }
 
 type Watcher struct {
-	tasks []FeedTask
-	st    store.StateStore
-	n     notifier.Notifier
-	opt   Options
-	log   *slog.Logger
-	now   func() time.Time // injectable for deterministic tests
+	tasks     []FeedTask
+	st        store.StateStore
+	n         notifier.Notifier
+	opt       Options
+	log       *slog.Logger
+	now       func() time.Time // injectable for deterministic tests
+	fetchGate *pace.Gate       // shared by every feed in every cycle
 }
 
 func New(tasks []FeedTask, st store.StateStore, n notifier.Notifier, opt Options, log *slog.Logger) *Watcher {
@@ -49,10 +57,16 @@ func New(tasks []FeedTask, st store.StateStore, n notifier.Notifier, opt Options
 	if opt.NotifyMode == "" {
 		opt.NotifyMode = "digest"
 	}
+	if opt.FetchConcurrency < 1 {
+		opt.FetchConcurrency = 1
+	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Watcher{tasks: tasks, st: st, n: n, opt: opt, log: log, now: time.Now}
+	return &Watcher{
+		tasks: tasks, st: st, n: n, opt: opt, log: log, now: time.Now,
+		fetchGate: pace.New(opt.FetchConcurrency, opt.FetchSpacing),
+	}
 }
 
 type outcome struct {
@@ -93,44 +107,69 @@ func (w *Watcher) RunOnce(ctx context.Context) error {
 	return w.regular(pollCtx, &state, outs, now)
 }
 
-// fetchAll is deliberately serial: three feeds every 30 minutes makes the cost
-// negligible, keeps diff/commit single-threaded and avoids GitHub rate limits.
-// The fetch phase could be parallelised later without changing the interface.
+// fetchAll uses a bounded worker pool plus a shared rate limiter. outcomes
+// are stored by task index, so diff and commit stay deterministic no matter
+// which worker finishes first. A cancelled/timed-out context makes the
+// remaining Acquire calls fail fast; those feeds are simply skipped (and stay
+// uncommitted) until the next cycle.
 func (w *Watcher) fetchAll(ctx context.Context, state domain.SeenState) []outcome {
-	outs := make([]outcome, 0, len(w.tasks))
-	for _, t := range w.tasks {
-		var cur source.Cursor
-		if fs := state.Feeds[t.Name]; fs != nil {
-			cur = source.Cursor{ETag: fs.ETag, LastModified: fs.LastModified}
-		}
-		res, err := t.Source.Fetch(ctx, cur)
-		if err != nil {
-			w.log.Error("feed fetch failed; skipping this feed for this cycle",
-				"feed", t.Name, "err", err)
-			outs = append(outs, outcome{name: t.Name, err: err})
-			continue
-		}
-		if res.NotModified {
-			w.log.Debug("feed not modified (304)", "feed", t.Name)
-			outs = append(outs, outcome{name: t.Name, res: res, notModified: true})
-			continue
-		}
-		stable := res.Releases
-		if t.Filter != nil {
-			stable = t.Filter.Apply(res.Releases)
-		}
-		w.log.Info("feed fetched", "feed", t.Name,
-			"entries", len(res.Releases), "stable", len(stable))
-		outs = append(outs, outcome{
-			name: t.Name, res: res, all: res.Releases, stable: stable,
+	outs := make([]outcome, len(w.tasks))
+	if len(w.tasks) == 0 {
+		return outs
+	}
+	indices := make(chan int)
+	workers := min(w.fetchGate.Concurrency(), len(w.tasks))
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for i := range indices {
+				outs[i] = w.fetchOne(ctx, i, state)
+			}
 		})
 	}
+	for i := range w.tasks {
+		indices <- i
+	}
+	close(indices)
+	wg.Wait()
 	return outs
+}
+
+func (w *Watcher) fetchOne(ctx context.Context, i int, state domain.SeenState) outcome {
+	t := w.tasks[i]
+	release, err := w.fetchGate.Acquire(ctx)
+	if err != nil {
+		return outcome{name: t.Name, err: err}
+	}
+	defer release()
+
+	var cur source.Cursor
+	if fs := state.Feeds[t.Name]; fs != nil {
+		cur = source.Cursor{ETag: fs.ETag, LastModified: fs.LastModified}
+	}
+	res, err := t.Source.Fetch(ctx, cur)
+	if err != nil {
+		w.log.Error("feed fetch failed; skipping this feed for this cycle",
+			"feed", t.Name, "err", err)
+		return outcome{name: t.Name, err: err}
+	}
+	if res.NotModified {
+		w.log.Debug("feed not modified (304)", "feed", t.Name)
+		return outcome{name: t.Name, res: res, notModified: true}
+	}
+	stable := res.Releases
+	if t.Filter != nil {
+		stable = t.Filter.Apply(res.Releases)
+	}
+	w.log.Info("feed fetched", "feed", t.Name,
+		"entries", len(res.Releases), "stable", len(stable))
+	return outcome{name: t.Name, res: res, all: res.Releases, stable: stable}
 }
 
 // baseline sends exactly one summary mail listing each feed's current latest
 // stable version. It is all-or-nothing: if any feed failed, the whole baseline
-// is postponed (no mail, no state write) and retried next cycle.
+// is postponed (no mail, no state write) and retried next cycle. mode=per_feed
+// does NOT apply here: the baseline is always one summary.
 func (w *Watcher) baseline(ctx context.Context, state *domain.SeenState, outs []outcome, now time.Time) error {
 	for _, o := range outs {
 		if o.err != nil {
@@ -150,7 +189,7 @@ func (w *Watcher) baseline(ctx context.Context, state *domain.SeenState, outs []
 	}
 	if len(items) == 0 {
 		w.log.Warn("baseline found no stable releases; committing without sending a mail")
-		w.commit(state, outs, now)
+		w.commit(state, outs, now, nil)
 		return w.save(ctx, *state)
 	}
 
@@ -158,12 +197,18 @@ func (w *Watcher) baseline(ctx context.Context, state *domain.SeenState, outs []
 	if err := w.n.Send(ctx, note); err != nil {
 		return fmt.Errorf("watcher: send baseline: %w", err)
 	}
-	w.commit(state, outs, now)
+	w.commit(state, outs, now, nil)
 	return w.save(ctx, *state)
 }
 
 // regular notifies only about stable releases whose IDs are not yet seen.
-// A send failure returns before commit, so the same batch is retried next time.
+//
+// Batches are committed INDEPENDENTLY. Under per_feed mode a failure in batch
+// k used to abort the whole cycle without any state write, so the next cycle
+// re-sent batches 1..k-1 as well. Now only the feeds in failed batches are
+// held back; successful feeds have their IDs and validators persisted even
+// when a later batch fails. digest mode has exactly one batch, so its
+// behaviour is unchanged (all-or-nothing).
 func (w *Watcher) regular(ctx context.Context, state *domain.SeenState, outs []outcome, now time.Time) error {
 	var newItems []domain.ReleaseItem
 	for _, o := range outs {
@@ -183,24 +228,58 @@ func (w *Watcher) regular(ctx context.Context, state *domain.SeenState, outs []o
 		}
 	}
 
+	blocked := make(map[string]struct{})
+	var sendErr error
+	failed := 0
 	if len(newItems) == 0 {
 		w.log.Debug("no new stable releases; staying silent")
 	} else {
-		for _, batch := range w.batch(newItems) {
-			note := domain.Notification{Kind: domain.KindNewReleases, GeneratedAt: now, Items: batch}
+		for _, b := range w.batch(newItems) {
+			note := domain.Notification{
+				Kind: domain.KindNewReleases, GeneratedAt: now,
+				Items: b.Items, Scope: b.Scope,
+			}
 			if err := w.n.Send(ctx, note); err != nil {
-				w.log.Error("notification failed; state NOT committed, will retry next cycle", "err", err)
-				return fmt.Errorf("watcher: send notification: %w", err)
+				failed++
+				if sendErr == nil {
+					sendErr = err
+				}
+				for _, it := range b.Items {
+					blocked[it.Feed] = struct{}{}
+				}
+				w.log.Error("notification batch failed; only these feeds will be retried",
+					"scope", b.Scope, "items", len(b.Items), "err", err)
+				continue
 			}
 		}
 	}
-	w.commit(state, outs, now)
-	return w.save(ctx, *state)
+	if failed > 0 {
+		w.log.Warn("some notification batches failed; committing only the delivered feeds",
+			"failed_batches", failed, "blocked_feeds", len(blocked))
+	}
+
+	w.commit(state, outs, now, blocked)
+	saveErr := w.save(ctx, *state)
+	if sendErr != nil {
+		wrapped := fmt.Errorf("watcher: send notification: %w", sendErr)
+		if saveErr != nil {
+			return errors.Join(wrapped, saveErr)
+		}
+		return wrapped
+	}
+	return saveErr
 }
 
-func (w *Watcher) batch(items []domain.ReleaseItem) [][]domain.ReleaseItem {
+// notificationBatch is one Send() call. Scope is set only for per_feed
+// batches, so templates can name the project in the subject.
+type notificationBatch struct {
+	Items []domain.ReleaseItem
+	Scope string
+}
+
+func (w *Watcher) batch(items []domain.ReleaseItem) []notificationBatch {
 	if w.opt.NotifyMode != "per_feed" {
-		return [][]domain.ReleaseItem{items}
+		return []notificationBatch{{Items: items}}
 	}
 	groups := make(map[string][]domain.ReleaseItem)
 	var order []string
@@ -210,19 +289,25 @@ func (w *Watcher) batch(items []domain.ReleaseItem) [][]domain.ReleaseItem {
 		}
 		groups[it.Feed] = append(groups[it.Feed], it)
 	}
-	out := make([][]domain.ReleaseItem, 0, len(order))
+	out := make([]notificationBatch, 0, len(order))
 	for _, name := range order {
-		out = append(out, groups[name])
+		out = append(out, notificationBatch{Items: groups[name], Scope: name})
 	}
 	return out
 }
 
-// commit only touches feeds that succeeded in this cycle. All fetched IDs are
-// marked seen (including prereleases and non-version tags), so they never
-// trigger repeated diffs; a later stable release has a different Atom ID.
-func (w *Watcher) commit(state *domain.SeenState, outs []outcome, now time.Time) {
+// commit only touches feeds that succeeded in this cycle AND are not blocked
+// by a failed notification. All fetched IDs are marked seen (including
+// prereleases and non-version tags), so they never trigger repeated diffs.
+// Skipping a blocked feed also keeps its OLD ETag: committing the new one
+// would make the next poll return 304 and the pending release would never be
+// re-notified.
+func (w *Watcher) commit(state *domain.SeenState, outs []outcome, now time.Time, blocked map[string]struct{}) {
 	for _, o := range outs {
 		if o.err != nil {
+			continue
+		}
+		if _, skip := blocked[o.name]; skip {
 			continue
 		}
 		fs := state.EnsureFeed(o.name)
@@ -251,8 +336,13 @@ func (w *Watcher) commit(state *domain.SeenState, outs []outcome, now time.Time)
 	state.UpdatedAt = now
 }
 
+// save uses its own short, cancellation-independent deadline. A poll cycle
+// with many feeds can hit poll.timeout after some notifications were already
+// delivered; dropping that state write would re-send them on the next cycle.
 func (w *Watcher) save(ctx context.Context, state domain.SeenState) error {
-	if err := w.st.Save(ctx, state); err != nil {
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := w.st.Save(saveCtx, state); err != nil {
 		return fmt.Errorf("watcher: save state: %w", err)
 	}
 	return nil

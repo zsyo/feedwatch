@@ -56,6 +56,7 @@ func formatDate(t time.Time) string {
 func subjectFor(n domain.Notification, prefix string) string {
 	prefix = strings.TrimSpace(prefix)
 	if n.Kind == domain.KindBaseline {
+		// The baseline is always one summary, even when mode=per_feed.
 		return strings.TrimSpace(prefix + " 版本监控已启动 · 当前版本基线")
 	}
 	limit := min(len(n.Items), 3)
@@ -66,6 +67,13 @@ func subjectFor(n domain.Notification, prefix string) string {
 	detail := strings.Join(versions, "、")
 	if len(n.Items) > 3 {
 		detail += fmt.Sprintf(" 等 %d 个", len(n.Items))
+	}
+	// per_feed batches carry a Scope so an IM/email list can tell which project
+	// a message belongs to without opening it. Digest stays project-agnostic.
+	scope := strings.TrimSpace(n.Scope)
+	if scope != "" {
+		return strings.TrimSpace(fmt.Sprintf("%s %s 发现 %d 个新版本：%s",
+			prefix, scope, len(n.Items), detail))
 	}
 	return strings.TrimSpace(fmt.Sprintf("%s 发现 %d 个新版本：%s", prefix, len(n.Items), detail))
 }
@@ -85,6 +93,9 @@ func Render(n domain.Notification, subjectPrefix string) (Rendered, error) {
 		d.Footer = "此后仅在新版本发布时通知。"
 	case domain.KindNewReleases:
 		d.Heading = "发现新版本"
+		if scope := strings.TrimSpace(n.Scope); scope != "" {
+			d.Heading += " · " + scope
+		}
 		d.Intro = "自上次检查以来，检测到以下新稳定版本："
 		d.Footer = "本邮件由 FeedWatch 自动发送。"
 	default:

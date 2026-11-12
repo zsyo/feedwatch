@@ -6,6 +6,11 @@ poll:
   interval: 30m          # Go duration: 10m / 30m / 1h / 6h
   run_on_start: true     # run one cycle immediately, then tick
   timeout: 2m            # hard timeout for one whole poll cycle
+  concurrency: 4         # max simultaneous feed requests (1 = fully serial)
+                         # 有界并发：订阅很多时不会被无限放大，也不会让慢 feed 饿死其它 feed
+  request_spacing: 100ms # 两次 feed 请求「发起」之间的最小间隔（全局，0s 关闭）
+                         # 大量 feed 指向同一域名（如 github.com）时用它削峰；
+                         # N 个 feed 至少耗 N × spacing，feed 极多时请调大 timeout 或设为 0s
 
 http:
   timeout: 15s           # per HTTP request
@@ -23,6 +28,9 @@ notify:
   # ---- 全局项（对所有渠道生效）----
   mode: digest           # digest (one push per cycle) | per_feed (one per project)
                          # 每条通知都会发给所有 enabled 渠道；首轮基线始终是 1 条汇总
+                         # per_feed 的标题会带上项目名；失败的批次只重试该项目
+  send_spacing: 250ms    # 两次渠道投递之间的最小间隔（全局共享，0s 关闭）
+                         # per_feed + 多 feed + 多渠道时，防止短时间内打满 IM/邮件 API
   # subject_prefix: "[FeedWatch]"   # 所有渠道共用的标题前缀，可省略
   # options: {}          # 所有渠道共享的默认值，被各渠道 options 覆盖
   #                      # 值里的 ${ENV_VAR} 启动时展开，缺失会直接报出变量名
@@ -36,9 +44,10 @@ notify:
       email:                          # email 渠道专属参数
         provider: resend
         from: "FeedWatch <releases@your-verified-domain.com>"  # verified domain required
-        to: [you@example.com]
+        to: [you@example.com]        # 多个收件人合并成 1 次 API 调用，最多 50 个；To/Cc 互相可见
         # cc: []
-        api_key_env: RESEND_API_KEY   # name of the env var holding the key
+        # bcc 暂未暴露；需要互相不可见时可用多个 email 渠道分别发送
+        api_key_env: RESEND_API_KEY   # 填环境变量「名字」，不是 ${...} 占位符
 
     # - type: wecom
     #   name: 企业微信群

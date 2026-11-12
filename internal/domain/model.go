@@ -104,4 +104,8 @@ type Notification struct {
 	Kind        NotificationKind
 	GeneratedAt time.Time
 	Items       []ReleaseItem
+	// Scope optionally names the single feed this notification covers. It is
+	// set only for per_feed batches, so templates can put the project name in
+	// the subject. Empty for digest notifications and for the baseline.
+	Scope string
 }
