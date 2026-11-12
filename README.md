@@ -266,7 +266,7 @@ tag 必须是 `vMAJOR.MINOR.PATCH`（允许 `-rc.1` 一类后缀）；格式不�
 | `v1.2.3` | `1.2.3`、`1.2`、`latest` |
 | `v1.2.3-rc.1` | `1.2.3-rc.1`（预发布不会移动 `latest`） |
 
-> 表中是假设的版本号，用于说明映射规则；本项目当前实际发布的是 `v1.0.0`，对应镜像 `1.0.0` / `1.0` / `latest`。
+> 本节里的 `v1.2.3` / `1.2.3` 都只是示意，不代表某个已发布版本。每次正式发版会新增一个完整版本号的镜像 tag，并把 `<主版本>.<次版本>` 与 `latest` 指向它；预发布只新增自己的 tag，不会移动 `latest`。已发布的具体版本以仓库 Releases / GHCR package 的 tag 列表为准，需要固定版本时用 `docker pull ghcr.io/zsyo/feedwatch:<版本>`。
 
 CI 会把 tag 通过 `-ldflags "-X main.version=..."` 注入二进制，容器内 `./feedwatch -version` 能直接看到版本。**无需配置任何额外 secret**：用内置 `GITHUB_TOKEN` + `packages: write` 登录 GHCR，构建缓存走 GitHub Actions cache。
 
@@ -305,7 +305,7 @@ docker run -d --name feedwatch \
 ```yaml
 services:
   feedwatch:
-    image: ghcr.io/zsyo/feedwatch:latest   # 也可指定具体的版本如 1.0.0
+    image: ghcr.io/zsyo/feedwatch:latest   # 也可固定到某个已发布的具体版本 tag
     # build: .                             # 删除这一行
 ```
 
