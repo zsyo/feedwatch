@@ -2,6 +2,8 @@
 
 一个 Go 常驻程序：按配置轮询 `releases.atom`，发现**新的稳定版本**后推送通知。通知渠道支持 Resend 邮件，以及企业微信、飞书、钉钉、Telegram、Slack、Discord、Teams、Bark、ntfy 和通用 Webhook，**可同时推送到多个渠道**。数据源、通知渠道、状态存储都是可插拔接口（当前数据源仍只有 Atom）。
 
+**两种镜像变体**：不带后缀的 base 镜像保持纯 `config.yaml` 手动配置（无前端资源、无 HTTP 服务、无 SQLite）；`-webui` 变体额外提供多用户 Web 管理界面、登录鉴权与 SQLite 存储。两者由同一个 `//go:build webui` 开关隔离，base 二进制不链接任何 WebUI / SQLite 代码，详见 [WebUI 变体](#webui-变体)。
+
 当前默认监控三个仓库（均已验证可用）：
 
 | 项目 | Atom 源 |
@@ -286,9 +288,64 @@ docker run --rm -v feedwatch_feedwatch-data:/src -v "$PWD/data:/dst" alpine:3.21
 
 想保留命名卷、只指定宿主机位置，也可以给顶层卷加 `driver_opts: {type: none, o: bind, device: /绝对路径/data}`，但日常直接用 `./data` 更简单。
 
+## WebUI 变体
+
+| | base | webui |
+| --- | --- | --- |
+| 镜像 tag | 无后缀 | 同版本号加 `-webui`（如 `latest-webui`） |
+| 配置来源 | 每次启动读 `config.yaml` | 首次把 `config.yaml` 当种子导入 SQLite，之后数据库是唯一来源 |
+| 界面 / 接口 | 无 | Vue 3 SPA + `/api/*`，默认监听 `:8080` |
+| 状态 | `data/state.json`（JSON 原子写） | SQLite WAL（`/app/data/feedwatch.db` 及 `-wal` / `-shm`） |
+| 用户 | 单用户（配置即全部订阅） | 多用户 + 管理员，订阅与渠道按用户隔离 |
+
+> **二选一运行**：不要同时启动 `docker-compose.yml` 与 `docker-compose.webui.yml`。两套各有独立的轮询器与状态，会针对同一批 release 各发一遍通知。
+
+### 启动
+
+```bash
+cp config.example.yaml config.yaml     # 首次种子来源，之后可不再修改
+cp .env.example .env                   # 填渠道密钥；WebUI 段可按需调整
+docker compose -f docker-compose.webui.yml up -d --build
+docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里打印一次
+```
+
+浏览器打开 `http://<宿主机>:8080`（端口由 `.env` 的 `WEBUI_HTTP_PORT` 控制）。用日志里的 `admin` 密码登录，**首次登录会被强制改密**；改密后所有旧会话立即失效。管理员可在「用户管理」里新建账号或重置密码（新密码只在页面上显示一次）。
+
+若经 HTTPS 反向代理访问，把 `.env` 的 `FEEDWATCH_WEBUI_COOKIE_SECURE` 设为 `true`；纯 HTTP 直连时务必保持 `false`，否则会话 cookie 带 `Secure` 标志、浏览器不会回传，导致无法登录。会话有效期由 `FEEDWATCH_WEBUI_SESSION_TTL` 控制（默认 `168h`）。
+
+### 数据与配置的关系
+
+- 空库（仅 `users` 表为空）时把 `config.yaml` 的 `feeds` / `channels` / 全局设置导入 SQLite，并生成一条基线通知；**之后改 `config.yaml` 不会影响已有数据**，订阅、渠道、设置都在页面里管理。
+- 数据库在命名卷 `feedwatch-webui-data:/app/data`。SQLite WAL 需要**目录**可写，启动期有和 base 一样的 `CreateTemp` 预检；把卷换成 bind mount 时同样用 `.env` 里的 `FW_UID` / `FW_GID` 指定宿主机属主。
+- 新用户新增订阅从当前全局 seen 集合建立基线，**不会补发历史版本**；删除后重新订阅也一样。
+- 「全局设置」页可改轮询间隔、超时、并发、抓取/发送间隔、HTTP 参数等；服务端逐项校验后写库，**重启进程后生效**（不热更新）。
+- `webui.cookie_secure` / `webui.session_ttl` 是环境变量控制的只读项；`notify.mode` 在多租户模式下是每条订阅自己的 `mode`（`digest` / `per_feed`），不再是全局开关。
+
+### 通知语义
+
+- 同一 URL 全局每轮只抓一次（`url_key = sha256(规范化 URL)`），抓完按每个用户各自的过滤条件、`always` / `on_update` 与 `digest` / `per_feed` 分流。
+- **不做跨用户合并**：每个用户 × 每个渠道一次独立请求，使用各自的 `api_key`，这样每个用户都能在 Resend 等后台看到自己的发送记录。限速按**渠道类型**分别计算（email / telegram / wecom …各一个独立门），不同服务互不阻塞。
+- 渠道密钥不落库：页面只保存 `${ENV_VAR}` 占位符或环境变量名（邮件填 `api_key_env` 的变量名，不加 `${}`），发送时才在内存里展开；明文 token 会被拒绝，列表回显统一脱敏。Compose 已把 `.env` 里全部渠道变量透传进容器。
+- 通知内容在抓取成功后就物化入库，投递失败只重试已渲染的投递组，不重新抓 feed、也不阻塞全局已见集合。
+
+### 页面与本地开发
+
+页面：`/login`、概览、我的订阅、通知方式、账号设置；管理员另有用户管理、轮询池、限速状态、全局设置、审计日志。普通用户看不到管理端入口，后端对他人资源一律返回 404。
+
+```bash
+make build-webui                 # 或 sh web/build.sh，产物写入 internal/webui/embedded/（已 gitignore）
+go build -tags webui -o feedwatch-webui.exe ./cmd/feedwatch
+FEEDWATCH_DB_PATH=data/feedwatch.db FEEDWATCH_HTTP_ADDR=127.0.0.1:8080 ./feedwatch-webui.exe -config config.yaml
+./feedwatch-webui.exe -once      # 离线冒烟：抓一轮 → 生成投递计划 → 投递一轮后退出
+```
+
+干净 clone 下 `-tags webui` 也能编译，页面只显示占位提示（仓库只提交 `embedded/stub.html`），真实前端由 `make build-webui` 或 `Dockerfile.webui` 的 Node stage 生成。`-dry-run` 在 WebUI 变体里无意义，会被忽略并记一条日志。
+
+> WebUI 仍是**单实例**：SQLite `SetMaxOpenConns(1)` + 单个后台 orchestrator，多实例写同一个库会产生写竞态与重复投递。
+
 ## 发布镜像（GitHub Actions / GHCR）
 
-`.github/workflows/docker-publish.yml` 在推送 `v*` tag 时自动构建 **linux/amd64 + linux/arm64** 双架构镜像，发布到 GitHub Container Registry：`ghcr.io/zsyo/feedwatch`。Docker 会按宿主机架构自动挑选 manifest，同一条 `pull` 命令在 x86 服务器和 ARM 板子上都能用。镜像名由 `${{ github.repository }}` 自动生成，fork 后会变成 `ghcr.io/<你的用户名>/feedwatch`，无需改 workflow。
+`.github/workflows/docker-publish.yml` 在推送 `v*` tag 时用 `matrix.variant: [base, webui]` **并行产出两组**镜像，每组各自是 **linux/amd64 + linux/arm64** 双架构 manifest，发布到 GitHub Container Registry：`ghcr.io/zsyo/feedwatch`。不带后缀的 tag 是纯配置版，`-webui` 后缀的是带管理界面的变体；两组的 `latest` 是不同 digest。Docker 会按宿主机架构自动挑选 manifest，同一条 `pull` 命令在 x86 服务器和 ARM 板子上都能用。镜像名由 `${{ github.repository }}` 自动生成，fork 后会变成 `ghcr.io/<你的用户名>/feedwatch`，无需改 workflow。
 
 ### 发布一个新版本
 
@@ -297,16 +354,16 @@ git tag -a v1.2.3 -m "release v1.2.3"
 git push origin v1.2.3
 ```
 
-tag 必须是 `vMAJOR.MINOR.PATCH`（允许 `-rc.1` 一类后缀）；格式不对时 workflow 立即报错退出，不会推镜像。
+tag 必须是 `vMAJOR.MINOR.PATCH`（允许 `-rc.1` 一类后缀）；格式不对时 workflow 立即报错退出，不会推镜像。一个 tag 同时触发两个 matrix job，`fail-fast: false` 保证其中一组失败不会取消另一组。
 
-| Git tag | 生成的镜像 tag |
-| --- | --- |
-| `v1.2.3` | `1.2.3`、`1.2`、`latest` |
-| `v1.2.3-rc.1` | `1.2.3-rc.1`（预发布不会移动 `latest`） |
+| Git tag | base 组镜像 tag | webui 组镜像 tag |
+| --- | --- | --- |
+| `v1.2.3` | `1.2.3`、`1.2`、`latest` | `1.2.3-webui`、`1.2-webui`、`latest-webui` |
+| `v1.2.3-rc.1` | `1.2.3-rc.1` | `1.2.3-rc.1-webui`（预发布不移动任何 `latest`） |
 
-> 本节里的 `v1.2.3` / `1.2.3` 都只是示意，不代表某个已发布版本。每次正式发版会新增一个完整版本号的镜像 tag，并把 `<主版本>.<次版本>` 与 `latest` 指向它；预发布只新增自己的 tag，不会移动 `latest`。已发布的具体版本以仓库 Releases / GHCR package 的 tag 列表为准，需要固定版本时用 `docker pull ghcr.io/zsyo/feedwatch:<版本>`。
+> 本节里的 `v1.2.3` / `1.2.3` 都只是示意，不代表某个已发布版本。通用规则：base 组按 `{{version}}` / `{{major}}.{{minor}}` / `latest` 生成，webui 组用同样的规则再加 `-webui` 后缀。每次正式发版两组都会新增完整版本号 tag，并各自移动自己的 `<主版本>.<次版本>` 与 `latest`；预发布只新增自己的 tag，两组的 `latest` 都不动。已发布的具体版本以仓库 Releases / GHCR package 的 tag 列表为准，固定版本时用 `docker pull ghcr.io/zsyo/feedwatch:<版本>` 或 `docker pull ghcr.io/zsyo/feedwatch:<版本>-webui`。
 
-CI 会把 tag 通过 `-ldflags "-X main.version=..."` 注入二进制，容器内 `./feedwatch -version` 能直接看到版本。**无需配置任何额外 secret**：用内置 `GITHUB_TOKEN` + `packages: write` 登录 GHCR，构建缓存走 GitHub Actions cache。
+CI 用 `matrix.variant` 切换 `file:`（`Dockerfile` / `Dockerfile.webui`），webui 组的 metadata-action 追加 `suffix=-webui,onlatest=true`；两组 layer cache 按 variant 隔离，互不挤占。tag 通过 `-ldflags "-X main.version=..."` 注入二进制，容器内 `./feedwatch -version` 能直接看到版本。**无需配置任何额外 secret**：用内置 `GITHUB_TOKEN` + `packages: write` 登录 GHCR，构建缓存走 GitHub Actions cache。
 
 ### 直接使用预构建镜像（服务器无需源码、无需本地编译）
 
@@ -320,7 +377,20 @@ docker run -d --name feedwatch \
   ghcr.io/zsyo/feedwatch:latest
 ```
 
-> 用命名卷时**不要**加 `--user`：Docker 会用镜像内 `/app/data` 的属主初始化空卷，正好是 `app` 用户；强行指定宿主机 uid 反而会写不进去。
+WebUI 变体换成带 `-webui` 的 tag，多映射一个端口并用自己的数据卷；首次启动的管理员密码只在日志里打印一次：
+
+```bash
+docker pull ghcr.io/zsyo/feedwatch:latest-webui
+docker run -d --name feedwatch-webui \
+  -p 8080:8080 \
+  -e RESEND_API_KEY="re_xxx" \
+  -v "$PWD/config.yaml:/app/config.yaml:ro" \
+  -v feedwatch-webui-data:/app/data \
+  ghcr.io/zsyo/feedwatch:latest-webui
+docker logs -f feedwatch-webui
+```
+
+> 用命名卷时**不要**加 `--user`：Docker 会用镜像内 `/app/data` 的属主初始化空卷，正好是 `app` 用户；强行指定宿主机 uid 反而会写不进去。WebUI 的 SQLite 卷同理。
 
 想把状态放在宿主机目录，改用 bind mount 并把容器用户设成该目录的属主。`docker run` 由 shell 展开 `$(...)`，可以直接写：
 
@@ -347,11 +417,13 @@ services:
     # build: .                             # 删除这一行
 ```
 
-然后 `docker compose pull && docker compose up -d`。
+然后 `docker compose pull && docker compose up -d`。WebUI 变体对应独立的 `docker-compose.webui.yml`：把 `image` 换成 `ghcr.io/zsyo/feedwatch:latest-webui` 并删掉 `build:` 段，`ports` / 独立数据卷 / `environment` 原样保留。
 
 ### 双架构是怎么构建的
 
 `Dockerfile` 编译阶段固定 `FROM --platform=$BUILDPLATFORM`，用 BuildKit 自动注入的 `TARGETOS` / `TARGETARCH` 做 `CGO_ENABLED=0` 交叉编译，Go 工具链始终跑在 runner 原生 amd64 上；QEMU 只负责运行阶段的 `apk add` / `adduser`（arm64 变体），比在 QEMU 里编译整个 Go 工具链快得多。`golang:1.27-alpine` 与 `alpine:3.21` 的官方镜像均含 `arm64v8` 变体。
+
+两个 Dockerfile 都是这个结构：`Dockerfile.webui` 多一个 `node:22-alpine` 前端 stage（同样跑在 `$BUILDPLATFORM`，产物是纯 JS/CSS），Go stage 用 `-tags webui` 把 `internal/webui/embedded/` 一起 `go:embed` 进二进制，运行阶段不需要 Node。base 的 `Dockerfile` 保持逐字节不变，因此 base 镜像里没有 npm、前端资源、HTTP server 或 SQLite；`go list -deps ./cmd/feedwatch` 也不会出现 `modernc.org/sqlite`、`internal/webui`、`database/sql`。
 
 本地 `docker compose build` 不带 `--platform`，只产出**本机架构**镜像；要复现双架构需 `docker buildx build --platform linux/amd64,linux/arm64 .`（多架构 manifest 只能推到 registry，`--load` 只支持单平台）。Dockerfile 依赖 BuildKit 自动注入的平台变量（Docker 23+ 默认启用）。
 
@@ -360,8 +432,10 @@ services:
 ## 目录结构
 
 ```
-.github/workflows/docker-publish.yml  tag 触发的 GHCR 双架构发布
-cmd/feedwatch/main.go          唯一组合根：注册实现、注入配置、启动调度
+.github/workflows/docker-publish.yml  tag 触发的 GHCR 双组双架构发布（matrix: base / webui）
+Dockerfile / Dockerfile.webui  base 两阶段构建 / 多一个 Node 前端 stage 的 webui 构建
+docker-compose.yml / docker-compose.webui.yml  base / webui 各自部署（二选一运行）
+cmd/feedwatch/main.go          唯一组合根；-version 后通过极薄 hook 分叉到 webui 变体
 internal/domain/              领域模型（零内部依赖）
 internal/config/              YAML + env 覆盖 + 校验
 internal/source/              Source 接口 / Registry
@@ -375,23 +449,30 @@ internal/notifier/webhook/    共享 HTTP 引擎 + 10 个渠道 Adapter（每个
 internal/pace/                有界并发 + 最小间隔的共享限速门
 internal/store/               StateStore 接口 / Registry
 internal/store/jsonfile/      JSON 原子写状态 + 启动期可写性预检
-internal/watcher/             核心编排：有界并发抓取 → 过滤 → diff → 分批通知 → 按批次提交
+internal/watcher/             base 核心编排：有界并发抓取 → 过滤 → diff → 分批通知 → 按批次提交（webui 不改动它）
+internal/webui/               WebUI 变体（全部 //go:build webui）：首启种子、URL 规范化、embed 资源
+internal/webui/store/         SQLite 建表/迁移/WAL/目录可写性预检（schema.sql 一次建全）
+internal/webui/auth/          bcrypt 密码、session、CSRF
+internal/webui/api/           HTTP server、中间件链、/api/* 端点与 SPA 静态服务
+internal/webui/orchestrator/  多租户轮询：URL 去重池、每用户策略分流、独立投递与按渠道类型限速
+internal/webui/embedded/      只提交 stub.html / .gitkeep，真实产物由构建生成且 gitignore
+web/                         Vue 3 + Vite + TS 源码与 build.sh
 testdata/                     测试用 feed 夹具
 ```
 
-依赖只有两个外部模块：`go.yaml.in/yaml/v4`、`github.com/resend/resend-go/v4`。Atom 解析用标准库 `encoding/xml`。
+base 二进制只链接两个外部模块：`go.yaml.in/yaml/v4`、`github.com/resend/resend-go/v4`；`-tags webui` 变体额外链接 `modernc.org/sqlite`（纯 Go、无需 cgo）与 `golang.org/x/crypto/bcrypt`。`go.mod` 会同时列出这些依赖，但链接器把 WebUI 依赖从 base 二进制中剔除。Atom 解析用标准库 `encoding/xml`。
 
 > YAML 依赖说明：原 `gopkg.in/yaml.v3`（`go-yaml/yaml`）已于 2025 年 4 月被作者标记为 unmaintained；官方 YAML 组织接管的正统继任者是 `go.yaml.in/yaml/*`，其中 v3 为冻结 API（仅安全修复），**v4 是当前活跃维护的稳定版**，故本项目直接使用 v4。`github.com/goccy/go-yaml` 是另一个从零重写的独立实现，与官方继任者无关，本项目未采用。配置解析仍用经典 `Unmarshal` API 以保持行为稳定；两个自定义 `UnmarshalYAML(*yaml.Node)` 钩子的 `Node` 必须来自同一模块，否则 v4 会报迁移错误。
 
 ## 如何扩展
 
-**新增数据源**（例如 GitHub REST API）：新建 `internal/source/githubapi/`，实现 `source.Source`（`Type()` + `Fetch(ctx, Cursor) (Result, error)`），导出匹配 `source.Factory` 的 `New`；在 `main.go` 加一行 `srcReg.Register("github_api", githubapi.New)`；配置里加 `type: github_api` 的 feed。新参数走 `feeds[].options` 透传。`domain` / `config` / `filter` / `store` / `notifier` / `watcher` / 模板 / Dockerfile **全部不用改**。
+**新增数据源**（例如 GitHub REST API）：新建 `internal/source/githubapi/`，实现 `source.Source`（`Type()` + `Fetch(ctx, Cursor) (Result, error)`），导出匹配 `source.Factory` 的 `New`；在 `main.go` 加一行 `srcReg.Register("github_api", githubapi.New)`；配置里加 `type: github_api` 的 feed。新参数走 `feeds[].options` 透传。`domain` / `config` / `filter` / `store` / `notifier` / `watcher` / 模板 / 两个 Dockerfile（base / webui）**全部不用改**（两种构建复用同一批叶子包）。
 
-**新增通知渠道**（例如 Matrix）：在 `internal/notifier/webhook/` 新增一个文件实现 `webhook.Adapter`（`Type()` + `Build(Message, Options) (Request, error)` + `Check(status, body) error`），在 `webhook/adapters.go` 的 `Adapters()` 里加一行即可。HTTP 客户端、重试/退避、渲染、日志、密钥展开全在共享引擎里，`main.go` / `config` / `watcher` / 模板 / Dockerfile **全部不用改**；配置里写 `type: matrix` + `options` 即可启用，也能与现有渠道并存。
+**新增通知渠道**（例如 Matrix）：在 `internal/notifier/webhook/` 新增一个文件实现 `webhook.Adapter`（`Type()` + `Build(Message, Options) (Request, error)` + `Check(status, body) error`），在 `webhook/adapters.go` 的 `Adapters()` 里加一行即可。HTTP 客户端、重试/退避、渲染、日志、密钥展开全在共享引擎里，`main.go` / `config` / `watcher` / 模板 / 两个 Dockerfile（base / webui）**全部不用改**（两种构建复用同一批叶子包）；配置里写 `type: matrix` + `options` 即可启用，也能与现有渠道并存。
 
 若新渠道完全不走 HTTP（例如写数据库、发 MQTT），则新建独立包实现 `notifier.Notifier`，并在 `main.go` 加一行 `notifReg.Register("xxx", xxx.New)`——`notify.channels` 会自动把它纳入扇出。
 
-**新增状态存储**（例如 SQLite）：实现 `store.StateStore`（`Load` 用 `store.ErrNotFound` 表示首次运行），注册 + 改 `store.type` 即可。
+**新增状态存储**（例如 SQLite）：实现 `store.StateStore`（`Load` 用 `store.ErrNotFound` 表示首次运行），注册 + 改 `store.type` 即可。注意 WebUI 变体的 SQLite 是独立的多租户存储（`internal/webui/store/`），不走这个接口。
 
 ## 测试
 
@@ -399,9 +480,18 @@ testdata/                     测试用 feed 夹具
 go test -race -count=1 ./...
 go vet ./...
 gofmt -l ./cmd ./internal
+
+# WebUI 变体：同一套代码换 build tag
+go test -race -count=1 -tags webui ./...
+go vet -tags webui ./...
+go build ./... && go build -tags webui ./...
+go list -deps ./cmd/feedwatch | grep -E 'modernc|/webui|database/sql'   # 应无输出
+sh web/build.sh                 # 生成前端资源后才能看到真实页面
 ```
 
 单元测试用 `httptest` 内存网络模拟 feed 与各渠道 webhook（200/204/202/304/429/5xx/畸形 XML/厂商错误码）、临时文件测状态原子写、fake sender 测 Resend 请求（含多收件人合并成 1 次调用）、可编程 fake source 覆盖 watcher 的首轮基线 / 重启静默 / 失败重试 / 单 feed 隔离 / 304 语义 / `per_feed` 部分批次失败只重试失败项目 / 基线固定汇总 / 抓取并发上限；另有 `pace` 限速门的确定性时钟用例、飞书/钉钉 HMAC 签名向量、环境变量展开、扇出失败策略的回归用例。`go test -race` 可覆盖新的并发路径。**测试不会发出真实邮件或真实群消息**。
+
+WebUI 专项用例另覆盖：bcrypt / session / CSRF 与 cookie 属性、越权与跨用户数据隔离、渠道密钥脱敏、URL 去重只抓一次、`always` / `on_update` 分流、每用户独立投递与按渠道类型限速、投递失败重试与放弃、管理端设置校验与审计、静态资源头与未知 `/api/*` 的 JSON 404。两种构建都跑同一套 base 回归，保证 WebUI 改动不污染 base 行为。
 
 改 workflow 后建议跑一次静态检查（需自行安装 `go install github.com/rhysd/actionlint/cmd/actionlint@latest`）：
 
@@ -411,10 +501,12 @@ actionlint .github/workflows/docker-publish.yml
 
 ## 已知限制
 
-- 单实例设计：多个实例共写同一状态文件会竞态。
+- 单实例设计：多个实例共写同一状态文件会竞态；WebUI 变体同理（SQLite `SetMaxOpenConns(1)` + 单个 orchestrator）。
 - GitHub feed 未认证访问有限流；默认 30 分钟 × 3 个源约 6 次/小时，并启用 ETag/304、`poll.concurrency` / `request_spacing` 削峰与指数退避。
 - `From` 必须是 Resend 已验证域名，否则发送会 403。
 - `best_effort` 策略下，某个渠道持续失败会丢弃该渠道的后续通知（只留 ERROR 日志），以保证其它渠道不被重复轰炸；要求不漏推送请改用 `strict`。
 - 各渠道都有自己的频率上限（企业微信 / 钉钉 20 条/分钟，飞书 100 条/分钟且 5 条/秒，Telegram 同一会话约 1 条/秒，Teams 4 次/秒；Resend 默认 10 次/秒/团队）。默认 30 分钟轮询 + 一轮一条 digest 远低于上限；`notify.send_spacing` 默认 250ms 只是通用保护，把 `mode` 改成 `per_feed`、加很多渠道或缩短间隔时仍需按最严格的那个渠道调整。
 - 限速是全局的、不区分域名；也不做跨轮次的配额预算（每个周期独立计算）。
 - 状态文件损坏时程序会报错并跳过该轮，**不会**静默当作首轮重发基线邮件；需人工检查 `data/state.json`。
+- WebUI 的「全局设置」写入数据库后需**重启进程**才生效；`FEEDWATCH_WEBUI_COOKIE_SECURE` / `FEEDWATCH_WEBUI_SESSION_TTL` 只在启动时读环境变量，页面里标为只读。
+- WebUI 变体的 `-dry-run` 无意义（会被忽略并记一条日志），`-once` 只跑一轮「抓取 → 生成投递计划 → 投递」后退出。
