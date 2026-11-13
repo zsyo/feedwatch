@@ -34,10 +34,6 @@ type NotifierSpec struct {
 	SubjectPrefix string
 	To            []string
 	Cc            []string
-	// Bcc is only set by the webui variant's merged-email path. The base build
-	// never sets it, so every generated Resend request stays byte-for-byte the
-	// same as before this field existed.
-	Bcc []string
 	// APIKey is injected by main from the environment; it never comes from YAML.
 	APIKey  string
 	Options map[string]string

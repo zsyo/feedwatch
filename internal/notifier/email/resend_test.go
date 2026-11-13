@@ -2,7 +2,6 @@ package email
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -70,43 +69,6 @@ func TestSendBuildsResendRequest(t *testing.T) {
 	}
 	if !strings.Contains(p.Html, "1.99.1") || !strings.Contains(p.Text, "1.99.1") {
 		t.Errorf("both HTML and text bodies must be populated: %q / %q", p.Html, p.Text)
-	}
-	// Base path: an empty Bcc must not add any field to the wire request.
-	if len(p.Bcc) != 0 || len(p.Headers) != 0 {
-		t.Errorf("base request gained fields: bcc=%v headers=%v", p.Bcc, p.Headers)
-	}
-	encoded, err := json.Marshal(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(encoded), `"bcc"`) || strings.Contains(string(encoded), `"headers"`) {
-		t.Errorf("base request JSON changed: %s", encoded)
-	}
-}
-
-// The webui variant merges several users into one call using Bcc. This is a
-// pure pass-through: To/Cc are untouched and there is still exactly one call.
-func TestSendPassesBccThrough(t *testing.T) {
-	f := &fakeSender{}
-	s := spec()
-	s.Bcc = []string{"hidden1@example.com", "hidden2@example.com"}
-	n := newWithSender(f, s, quiet())
-	if err := n.Send(context.Background(), domain.Notification{
-		Kind: domain.KindNewReleases,
-		Items: []domain.ReleaseItem{{
-			Feed: "golang/go", Version: "go1.27.4", URL: "https://example.com/r", IsNew: true,
-		}},
-	}); err != nil {
-		t.Fatalf("Send: %v", err)
-	}
-	if f.calls != 1 {
-		t.Fatalf("want one API call, got %d", f.calls)
-	}
-	if len(f.params.Bcc) != 2 || f.params.Bcc[1] != "hidden2@example.com" {
-		t.Errorf("Bcc was not passed through: %v", f.params.Bcc)
-	}
-	if len(f.params.To) != 1 || f.params.To[0] != "you@example.com" || len(f.params.Cc) != 1 {
-		t.Errorf("To/Cc must stay untouched: %+v", f.params)
 	}
 }
 

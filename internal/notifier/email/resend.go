@@ -60,7 +60,6 @@ func (n *Notifier) Send(ctx context.Context, note domain.Notification) error {
 		From:    n.spec.From,
 		To:      n.spec.To,
 		Cc:      n.spec.Cc,
-		Bcc:     n.spec.Bcc,
 		Subject: rendered.Subject,
 		Html:    rendered.HTML,
 		Text:    rendered.Text,
