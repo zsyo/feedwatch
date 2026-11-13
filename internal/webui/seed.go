@@ -11,8 +11,10 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"feedwatch/internal/config"
+	"feedwatch/internal/domain"
 	"feedwatch/internal/webui/store"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -225,9 +227,31 @@ func seedBaseline(tx *sql.Tx, cycleID string, userID int64, cfg config.Config, f
 	text := fmt.Sprintf(
 		"FeedWatch WebUI 已初始化，导入 %d 个订阅、%d 个通知渠道。\n这是首轮基线汇总，之后只会在检测到新稳定版时推送。",
 		feedCount, len(channelIDs))
+	// Store the same Envelope shape the orchestrator uses, so the delivery
+	// worker can reconstruct a channel-neutral notification for this baseline
+	// without any special case. It still creates its own pending groups below.
+	items := make([]domain.ReleaseItem, 0, len(cfg.Feeds))
+	for _, f := range cfg.Feeds {
+		if !f.Enabled {
+			continue
+		}
+		name := f.Name
+		if name == "" {
+			name = f.URL
+		}
+		items = append(items, domain.ReleaseItem{Feed: name, Version: "基线已建立", URL: f.URL})
+	}
+	payload, err := json.Marshal(map[string]any{
+		"user_id":     userID,
+		"channel_ids": channelIDs,
+		"note":        domain.Notification{Kind: domain.KindBaseline, GeneratedAt: time.Now().UTC(), Items: items},
+	})
+	if err != nil {
+		return fmt.Errorf("webui: encode baseline envelope: %w", err)
+	}
 	if _, err := tx.Exec(`INSERT INTO notifications
 		(cycle_id, merge_key, kind, subject, "text", html, markdown, created_at)
-		VALUES (?,?,?,?,?,?,?,?)`, cycleID, "seed-baseline", "baseline", subject, text, "", "", now,
+		VALUES (?,?,?,?,?,?,?,?)`, cycleID, "seed-baseline", "baseline", subject, text, "", string(payload), now,
 	); err != nil {
 		return fmt.Errorf("webui: seed baseline notification: %w", err)
 	}

@@ -118,6 +118,24 @@ func TestSeedCreatesAdminAndImportsOnce(t *testing.T) {
 		}
 	}
 
+	var markdown string
+	if err := s.DB().QueryRow(`SELECT markdown FROM notifications WHERE kind='baseline'`).Scan(&markdown); err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		UserID     int64   `json:"user_id"`
+		ChannelIDs []int64 `json:"channel_ids"`
+		Note       struct {
+			Kind string `json:"Kind"`
+		} `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(markdown), &envelope); err != nil {
+		t.Fatalf("baseline must carry a delivery envelope: %v (%q)", err, markdown)
+	}
+	if envelope.Note.Kind != "baseline" || len(envelope.ChannelIDs) != 2 {
+		t.Fatalf("unexpected baseline envelope: %+v", envelope)
+	}
+
 	// A second start must not regenerate the password or duplicate any seed.
 	cfg.Feeds = append(cfg.Feeds, config.FeedConfig{Name: "new", Type: "atom", URL: "https://example.com/a.atom", Enabled: true})
 	second, err := Seed(s, cfg, nil)
