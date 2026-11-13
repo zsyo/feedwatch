@@ -36,9 +36,21 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("DELETE /api/admin/users/{id}", s.handle("admin", false, s.deleteUser))
 	mux.Handle("POST /api/admin/users/{id}/reset-password", s.handle("admin", false, s.resetPassword))
 	mux.Handle("GET /api/admin/overview", s.handle("admin", false, s.adminOverview))
+	mux.Handle("GET /api/admin/pool", s.handle("admin", false, s.adminPool))
+	mux.Handle("GET /api/admin/ratelimit", s.handle("admin", false, s.adminRateLimit))
+	mux.Handle("GET /api/admin/audit", s.handle("admin", false, s.adminAudit))
+	mux.Handle("GET /api/admin/settings", s.handle("admin", false, s.adminGetSettings))
+	mux.Handle("PUT /api/admin/settings", s.handle("admin", false, s.adminPutSettings))
 
-	// SPA / static fallback. Unknown /api/* paths are rejected inside static
-	// rather than silently returning HTML.
+	// Unknown /api/* paths must be JSON 404s for every method. A single method-
+	// less "/api/" pattern would overlap "GET /" without being a strict subset,
+	// which Go 1.22 ServeMux rejects at registration time; method-specific
+	// catch-alls keep the SPA fallback intact. HEAD is covered by "GET /api/".
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		mux.Handle(method+" /api/", s.handle("", true, s.apiNotFound))
+	}
+
+	// SPA / static fallback.
 	mux.Handle("GET /", s.handle("", true, s.static))
 	return mux
 }

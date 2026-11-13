@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"net"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -241,4 +242,30 @@ func (l *rateLimiter) allow(key string, limit int, window time.Duration) bool {
 	b.count++
 	l.buckets[key] = b
 	return true
+}
+
+type rateBucketSnapshot struct {
+	Key     string
+	Count   int
+	ResetAt string
+}
+
+// snapshot returns the live buckets in a stable order and prunes expired ones.
+// It is read-only from the handler's point of view; callers mask the IP half
+// of the key before sending it to the browser.
+func (l *rateLimiter) snapshot(now time.Time) []rateBucketSnapshot {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]rateBucketSnapshot, 0, len(l.buckets))
+	for k, b := range l.buckets {
+		if now.After(b.reset) {
+			delete(l.buckets, k)
+			continue
+		}
+		out = append(out, rateBucketSnapshot{
+			Key: k, Count: b.count, ResetAt: b.reset.UTC().Format(time.RFC3339),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
 }
