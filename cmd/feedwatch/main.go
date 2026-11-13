@@ -211,6 +211,12 @@ func run() error {
 		return nil
 	}
 
+	// webui builds take over here. The base build has a constant-false stub, so
+	// the linker removes this branch and config.Load remains the first real step.
+	if handled, err := webuiLaunch(*cfgPath, *logLevel, *logFormat, *once, *dryRun); handled {
+		return err
+	}
+
 	cfg, err := config.Load(*cfgPath, config.Overrides{
 		StatePath:    *statePath,
 		LogLevel:     *logLevel,

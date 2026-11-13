@@ -12,3 +12,11 @@ config.local.yaml
 *.dryrun.json
 README.md
 Makefile
+
+# WebUI: local node_modules and locally built assets are rebuilt inside the
+# image's Node stage, so keep them out of the build context. The versioned stub
+# stays so `go:embed all:embedded` compiles before the COPY --from=assets step.
+web/node_modules/
+internal/webui/embedded/*
+!internal/webui/embedded/stub.html
+!internal/webui/embedded/.gitkeep

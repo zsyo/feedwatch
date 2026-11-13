@@ -24,3 +24,11 @@ Thumbs.db
 
 # WorkBuddy workspace data (agent memory, not application code)
 .workbuddy/
+
+# WebUI: Vite writes index.html / assets / BUILD_ID into embedded/. Only the
+# placeholder and the directory keeper are versioned; real assets are rebuilt by
+# `make build-webui` locally or by the Docker Node stage.
+internal/webui/embedded/*
+!internal/webui/embedded/stub.html
+!internal/webui/embedded/.gitkeep
+web/node_modules/
