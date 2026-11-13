@@ -17,6 +17,9 @@ services:
     # Defaults to the image's unprivileged app:app, matching the named volume.
     # For a BIND MOUNT of /app/data, set FW_UID/FW_GID to plain numeric host
     # ids in .env (Compose does not execute $(id -u)).
+    # On ROOTLESS Docker the container uid is remapped to 100000+ on the host,
+    # so those numbers never match: use `user: "0:0"` for a bind mount (container
+    # root is your host user) or keep the named volume and no `user:` at all.
     user: "${FW_UID:-app}:${FW_GID:-app}"
     environment:
       TZ: Asia/Shanghai

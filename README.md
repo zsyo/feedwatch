@@ -26,6 +26,7 @@
 | HTTP 304 | 不做 diff、不改写已见集合、不发通知 |
 | 预发布 / 非版本标签 | 默认不通知（`go1.27rc3`、`v3.16.0a1`、CPython 的 `3.10` 分支 tag 等），但 ID 仍记为已见 |
 | 状态目录不可写（如 bind mount 权限不对） | **启动即失败**：`jsonfile.New` 在启动期用 `CreateTemp` 探测一次并立刻删除，不会先发通知再发现存不下 |
+| 目录属主看着没问题却仍 not writable | 多半是 **rootless Docker**：容器 uid 映射到宿主的 `100000+`，与 `id -u` 无关；用命名卷或 `user: "0:0"`，见 [rootless Docker 下的 uid 映射](#rootless-docker-下的-uid-映射) |
 | 订阅很多 feed / 一轮很多通知 | 抓取受 `poll.concurrency` 有界并发 + `poll.request_spacing` 限速；渠道投递受 `notify.send_spacing` 限速（**按渠道类型**，同类型共用一个门），见[并发与频率控制](#并发与频率控制) |
 
 > 去重只认 Atom `<id>`，不是版本号。GitHub 的 feed 只保留最近约 10 条，长时间停机漏掉的中间版本不会补发——这是预期行为。
@@ -274,7 +275,7 @@ FW_UID=$(id -u) FW_GID=$(id -g) docker compose up -d
 >
 > 两者都不设置时 `user` 为 `app:app`，等价于镜像的 `USER app`，正好匹配默认命名卷的属主，所以默认的命名卷部署方式完全不受影响。
 
-两条备选：保持默认用户而给目录授权（`sudo chown <容器内 app 的 uid>:<gid> data`，或 `chmod 777 data`——所有用户可写，不推荐）；或在 compose 里把 `user` 写死成具体数字。自定义 compose 文件时，同样只需在 service 下加 `user: "1000:1000"`（换成宿主机实际值）。
+两条备选：保持默认用户而给目录授权（`sudo chown <容器内 app 的 uid>:<gid> data`，或 `chmod 777 data`——所有用户可写，不推荐）；或在 compose 里把 `user` 写死成具体数字。自定义 compose 文件时，同样只需在 service 下加 `user: "1000:1000"`（换成宿主机实际值；**rootless 模式不适用，见下节**）。
 
 **配错会在启动期就被拦住**：`jsonfile.New` 在建 store 时先用 `CreateTemp` 在状态目录探测一次并立即删除，不可写就直接启动失败（`state directory ... is not writable`），不会先发出基线邮件才发现存不下。所以现在看到的是启动报错 + 容器反复重启，而不是每半小时一封重复通知。
 
@@ -288,6 +289,25 @@ docker run --rm -v feedwatch_feedwatch-data:/src -v "$PWD/data:/dst" alpine:3.21
 ```
 
 想保留命名卷、只指定宿主机位置，也可以给顶层卷加 `driver_opts: {type: none, o: bind, device: /绝对路径/data}`，但日常直接用 `./data` 更简单。
+
+### rootless Docker 下的 uid 映射
+
+以 rootless 模式运行 Docker（RootlessKit）时，上面那套「套用宿主机 uid」的做法会失效，而且失败现象和权限完全正常时一模一样。原因：容器里的 uid **N** 落到宿主机上不是 N，而是 subuid 区间里的 `100000 + (N - 1)`（典型值 100999）。宿主机目录明明是 `zephyr:zephyr 775`、`id -u` 也确实等于 1000，容器以 `user: "1000:1000"` 运行仍会 `permission denied` —— 对 100999 来说那个目录只剩 others 的 `r-x`。
+
+```bash
+grep "^$(id -un):" /etc/subuid /etc/subgid        # 确认映射起点，通常是 100000
+docker info --format '{{json .SecurityOptions}}'  # 含 name=rootless 即确认是 rootless
+```
+
+三种做法，按推荐顺序：
+
+1. **用命名卷、不写 `user:`**（默认形态）：卷在 rootless 的存储里，由镜像内 `/app/data` 的属主初始化，完全绕开宿主 uid。
+2. **bind mount 时写 `user: "0:0"`**：rootless 下容器的 root 就是**宿主的登录用户**，既能写 `./data`，容器创建的文件在宿主机上也正好属于自己，`ls` / 备份 / `chown` 都符合直觉；隔离仍由 user namespace 保证，不等于拿到了宿主机 root。
+3. `chown` 到映射后的 uid（`sudo chown -R 100999:100999 data`）：能用但脆弱，换机器、改 `/etc/subuid`、迁目录后都会再次失效，不推荐。
+
+> 与上节不冲突：**别把命名卷和 `user: "0:0"` / `1000:1000` 混着用**。命名卷是用镜像内 `/app/data` 的属主（`app`，Alpine 的 `adduser -S` 从 100 起分配）初始化的，套一个不匹配的 uid 同样会在 `jsonfile` / SQLite 的启动预检处失败。
+
+rootless 还有两点差异：容器绑不了 1024 以下端口（默认 8080 不受影响）；`restart: unless-stopped` 要真正跨宿主重启生效，需要把守护进程交给 systemd 用户实例（`systemctl --user enable --now docker`）。
 
 ## WebUI 变体
 
@@ -317,7 +337,7 @@ docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里
 ### 数据与配置的关系
 
 - 空库（仅 `users` 表为空）时把 `config.yaml` 的 `feeds` / `channels` / 全局设置导入 SQLite，并生成一条基线通知；**之后改 `config.yaml` 不会影响已有数据**，订阅、渠道、设置都在页面里管理。
-- 数据库在命名卷 `feedwatch-webui-data:/app/data`。SQLite WAL 需要**目录**可写，启动期有和 base 一样的 `CreateTemp` 预检；把卷换成 bind mount 时同样用 `.env` 里的 `FW_UID` / `FW_GID` 指定宿主机属主。
+- 数据库在命名卷 `feedwatch-webui-data:/app/data`。SQLite WAL 需要**目录**可写，启动期有和 base 一样的 `CreateTemp` 预检；把卷换成 bind mount 时同样用 `.env` 里的 `FW_UID` / `FW_GID` 指定宿主机属主——**rootless Docker 例外**，此时容器的 uid 不是宿主 uid，要么保留命名卷，要么写 `user: "0:0"`，见 [rootless Docker 下的 uid 映射](#rootless-docker-下的-uid-映射)。
 - 新用户新增订阅从当前全局 seen 集合建立基线，**不会补发历史版本**；删除后重新订阅也一样。
 - 「全局设置」页可改轮询间隔、超时、并发、抓取/发送间隔、HTTP 参数等；服务端逐项校验后写库，**重启进程后生效**（不热更新）。
 - `webui.cookie_secure` / `webui.session_ttl` 是环境变量控制的只读项；`notify.mode` 在多租户模式下是每条订阅自己的 `mode`（`digest` / `per_feed`），不再是全局开关。
@@ -407,7 +427,7 @@ docker run -d --name feedwatch \
   ghcr.io/zsyo/feedwatch:latest
 ```
 
-`--user "$(id -u):$(id -g)"` 与 compose 里的 `FW_UID` / `FW_GID` 覆盖等价；同样要求当前用户就是 `data/` 的属主，原理见上一节。
+`--user "$(id -u):$(id -g)"` 与 compose 里的 `FW_UID` / `FW_GID` 覆盖等价；同样要求当前用户就是 `data/` 的属主，原理见上一节。**rootless Docker 下要改成 `--user 0:0`**：容器里的 uid 1000 映射到宿主的 100999，写不进您自己 1000 拥有的目录，而容器 root 恰好等于宿主的登录用户。
 
 > 用多通道时，把对应的 `-e WECOM_WEBHOOK_URL=...`、`-e TELEGRAM_BOT_TOKEN=...` 等一并加进 `docker run`（或写进 compose 的 `environment`）；漏掉的变量会在启动日志里直接报出名字。
 
