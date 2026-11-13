@@ -1,3 +1,6 @@
+# Base variant only (no HTTP server, no frontend, no SQLite). The WebUI build
+# lives in Dockerfile.webui and has its own docker-compose.webui.yml; never run
+# both files at once, or two pollers will send duplicate notifications.
 services:
   feedwatch:
     # Single instance by design (shared state file). A stable short name keeps

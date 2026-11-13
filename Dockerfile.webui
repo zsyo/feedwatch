@@ -1,0 +1,54 @@
+# ---- frontend stage (runs on the builder's native platform) ----
+# The SPA is pure JS/CSS, so it is built once on $BUILDPLATFORM and copied into
+# the Go stage as plain files. Nothing from node_modules reaches the runtime.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS assets
+WORKDIR /src
+COPY web/ /src/web/
+# .dockerignore keeps web/node_modules out of the context; npm ci recreates it.
+# OUT_DIR is absolute so build.sh does not touch the versioned embedded/ files.
+RUN mkdir -p /web/out && OUT_DIR=/web/out sh /src/web/build.sh
+
+# ---- build stage ----
+# Same cross-compilation strategy as the base Dockerfile: the Go toolchain runs
+# on the builder's native platform and only the resulting binary is arm/amd.
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# The base checkout only carries embedded/stub.html; overlay the real Vite
+# output (index.html, assets/, BUILD_ID) before go:embed is evaluated.
+COPY --from=assets /web/out/ /src/internal/webui/embedded/
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -trimpath -tags webui -ldflags="-s -w -X main.version=${VERSION}" \
+    -o /out/feedwatch ./cmd/feedwatch
+
+# ---- runtime stage ----
+FROM alpine:3.21
+# ca-certificates for HTTPS feeds/webhooks; tzdata for readable local times.
+RUN apk add --no-cache ca-certificates tzdata \
+ && addgroup -S app \
+ && adduser -S -G app app
+ENV TZ=Asia/Shanghai
+WORKDIR /app
+COPY --from=build /out/feedwatch /app/feedwatch
+# A readable seed source for an empty database. WebUI reads it leniently (no
+# config.Validate), and afterwards the SQLite settings/subscriptions tables are
+# the only source of truth. Bind-mount your own config.yaml to change the seeds.
+COPY config.example.yaml /app/config.yaml
+# SQLite WAL writes -wal/-shm siblings, so the DATA DIRECTORY must be writable.
+RUN mkdir -p /app/data && chown -R app:app /app
+USER app
+ENV FEEDWATCH_DB_PATH=/app/data/feedwatch.db \
+    FEEDWATCH_HTTP_ADDR=:8080 \
+    FEEDWATCH_LOG_FORMAT=json \
+    FEEDWATCH_CONFIG=/app/config.yaml
+EXPOSE 8080
+# The database MUST live on this volume: losing it regenerates the admin
+# password and re-imports the seeds on every container restart.
+VOLUME ["/app/data"]
+ENTRYPOINT ["/app/feedwatch"]
+CMD ["-config", "/app/config.yaml"]

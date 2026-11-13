@@ -1,0 +1,60 @@
+# WebUI variant. Build and start with:
+#   cp config.example.yaml config.yaml
+#   docker compose -f docker-compose.webui.yml up -d --build
+#
+# IMPORTANT: do NOT run this together with the base docker-compose.yml. Each
+# variant has its own database and poller, so running both would send two sets
+# of notifications for the same releases.
+services:
+  feedwatch-webui:
+    container_name: feedwatch-webui
+    build:
+      context: .
+      dockerfile: Dockerfile.webui
+      args:
+        VERSION: ${VERSION:-dev}
+    image: feedwatch:webui
+    # Defaults to the image's unprivileged app:app, matching the named volume.
+    # For a BIND MOUNT of /app/data, set FW_UID/FW_GID to plain numeric host
+    # ids in .env (Compose does not execute $(id -u)).
+    user: "${FW_UID:-app}:${FW_GID:-app}"
+    environment:
+      TZ: Asia/Shanghai
+      FEEDWATCH_DB_PATH: /app/data/feedwatch.db
+      FEEDWATCH_HTTP_ADDR: :8080
+      FEEDWATCH_LOG_FORMAT: json
+      FEEDWATCH_CONFIG: /app/config.yaml
+      # Only enable Secure cookies behind an HTTPS reverse proxy; setting it to
+      # true while serving plain HTTP makes logging in impossible.
+      FEEDWATCH_WEBUI_COOKIE_SECURE: ${FEEDWATCH_WEBUI_COOKIE_SECURE:-false}
+      FEEDWATCH_WEBUI_SESSION_TTL: ${FEEDWATCH_WEBUI_SESSION_TTL:-168h}
+      # Channel secrets are expanded from these at send time. They are never
+      # stored in SQLite; only ${ENV_VAR} references / variable names are.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      WECOM_WEBHOOK_URL: ${WECOM_WEBHOOK_URL:-}
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
+      FEISHU_WEBHOOK_SECRET: ${FEISHU_WEBHOOK_SECRET:-}
+      DINGTALK_WEBHOOK_URL: ${DINGTALK_WEBHOOK_URL:-}
+      DINGTALK_WEBHOOK_SECRET: ${DINGTALK_WEBHOOK_SECRET:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      TEAMS_WEBHOOK_URL: ${TEAMS_WEBHOOK_URL:-}
+      BARK_WEBHOOK_URL: ${BARK_WEBHOOK_URL:-}
+      NTFY_TOPIC_URL: ${NTFY_TOPIC_URL:-}
+      NTFY_TOKEN: ${NTFY_TOKEN:-}
+      GENERIC_WEBHOOK_URL: ${GENERIC_WEBHOOK_URL:-}
+      GENERIC_TOKEN: ${GENERIC_TOKEN:-}
+    ports:
+      - "${WEBUI_HTTP_PORT:-8080}:8080"
+    volumes:
+      # Seed source: create it first (Docker would make a directory otherwise).
+      - ./config.yaml:/app/config.yaml:ro
+      # SQLite database + WAL side files. Keep this volume.
+      - feedwatch-webui-data:/app/data
+    restart: unless-stopped
+    command: ["-config", "/app/config.yaml"]
+
+volumes:
+  feedwatch-webui-data:
