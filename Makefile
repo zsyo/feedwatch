@@ -1,4 +1,4 @@
-.PHONY: build run dry-run once test vet fmt tidy clean docker init
+.PHONY: build run dry-run once test vet fmt tidy clean docker init build-webui
 
 BINARY := feedwatch.exe
 
@@ -37,3 +37,8 @@ clean:
 
 docker:
 	docker compose build
+
+# Rebuild the SPA assets that `go build -tags webui` embeds. The generated files
+# under internal/webui/embedded/ are gitignored on purpose.
+build-webui:
+	sh web/build.sh
