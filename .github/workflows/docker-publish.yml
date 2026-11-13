@@ -19,11 +19,21 @@ env:
 
 jobs:
   build-and-push:
+    name: Build ${{ matrix.variant }} (amd64 + arm64)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
       packages: write # required to push to GHCR with GITHUB_TOKEN
+    # One push of vMAJOR.MINOR.PATCH produces two independent OCI indexes:
+    #   base  -> {{version}}, {{major}}.{{minor}}, latest
+    #   webui -> {{version}}-webui, {{major}}.{{minor}}-webui, latest-webui
+    # Each index carries linux/amd64 + linux/arm64. fail-fast:false keeps a
+    # failure in one variant from cancelling the other.
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [base, webui]
 
     steps:
       - name: Validate release tag
@@ -34,14 +44,16 @@ jobs:
             echo "::error::Tag '$tag' is not semver; use vMAJOR.MINOR.PATCH (e.g. v1.2.3)."
             exit 1
           fi
-          echo "Publishing release $tag"
+          echo "Publishing release $tag (${{ matrix.variant }})"
 
       - name: Checkout repository
         uses: actions/checkout@v7
 
       # The Go build itself is cross-compiled on the native amd64 runner (see
-      # Dockerfile: FROM --platform=$BUILDPLATFORM). QEMU is only needed for
-      # the runtime stage's `apk add` / `adduser` on the arm64 variant.
+      # the Dockerfiles: FROM --platform=$BUILDPLATFORM). QEMU is only needed
+      # for the runtime stage's `apk add` / `adduser` on the arm64 variant.
+      # The webui Node stage also runs on $BUILDPLATFORM, so no emulation of
+      # the frontend toolchain is involved.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
         with:
@@ -57,45 +69,63 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract image metadata
+      - name: Extract image metadata (${{ matrix.variant }})
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # The suffix applies to ALL generated tags, including latest, so the
+          # webui group never collides with the base group. A prerelease still
+          # moves neither `latest` nor `latest-webui`.
           flavor: |
             latest=auto
-          # v1.2.3 -> 1.2.3, 1.2, latest
-          # v1.2.3-rc.1 -> 1.2.3-rc.1 only (latest is never moved by a prerelease)
+            ${{ matrix.variant == 'webui' && 'suffix=-webui,onlatest=true' || '' }}
+          # v1.2.3 -> 1.2.3, 1.2, latest (base) / the same with -webui (webui)
+          # v1.2.3-rc.1 -> 1.2.3-rc.1(-webui) only
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      - name: Build and push (linux/amd64 + linux/arm64)
+      - name: Build and push ${{ matrix.variant }} (linux/amd64 + linux/arm64)
         id: build
         uses: docker/build-push-action@v7
         with:
           # Path context (not the Git context) so .dockerignore is honoured.
+          # The base Dockerfile stays byte-for-byte unchanged; only the webui
+          # variant points at the Node-stage Dockerfile.
           context: .
+          file: ${{ matrix.variant == 'webui' && './Dockerfile.webui' || './Dockerfile' }}
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ github.ref_name }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Isolate the layer caches: the two variants have very different
+          # dependency sets (sqlite/bcrypt/node) and must not evict each other.
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
 
-      - name: Write job summary
+      - name: Write job summary (${{ matrix.variant }})
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           TAG: ${{ github.ref_name }}
+          VARIANT: ${{ matrix.variant }}
+          DOCKERFILE: ${{ matrix.variant == 'webui' && 'Dockerfile.webui' || 'Dockerfile' }}
+          TAGS: ${{ steps.meta.outputs.tags }}
           DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
         run: |
           {
-            echo "### Published to GHCR"
+            echo "### Published \`$VARIANT\` images to GHCR"
             echo ""
             echo "- Image: \`$IMAGE\`"
-            echo "- Tag: \`$TAG\`"
+            echo "- Trigger tag: \`$TAG\`"
+            echo "- Dockerfile: \`$DOCKERFILE\`"
             echo "- Platforms: linux/amd64, linux/arm64"
             echo "- Digest: \`$DIGEST\`"
+            echo "- Tags:"
+            while IFS= read -r t; do
+              [ -z "$t" ] || echo "  - \`$t\`"
+            done <<< "$TAGS"
           } >> "$GITHUB_STEP_SUMMARY"
