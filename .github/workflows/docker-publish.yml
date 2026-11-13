@@ -27,7 +27,7 @@ jobs:
       packages: write # required to push to GHCR with GITHUB_TOKEN
     # One push of vMAJOR.MINOR.PATCH produces two independent OCI indexes:
     #   base  -> {{version}}, {{major}}.{{minor}}, latest
-    #   webui -> {{version}}-webui, {{major}}.{{minor}}-webui, latest-webui
+    #   webui -> {{version}}-webui, {{major}}.{{minor}}-webui, webui
     # Each index carries linux/amd64 + linux/arm64. fail-fast:false keeps a
     # failure in one variant from cancelling the other.
     strategy:
@@ -37,12 +37,21 @@ jobs:
 
     steps:
       - name: Validate release tag
+        id: release
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME}"
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::Tag '$tag' is not semver; use vMAJOR.MINOR.PATCH (e.g. v1.2.3)."
             exit 1
+          fi
+          # A hyphen in the validated form is always a prerelease suffix. The
+          # webui pointer tag is gated on this so a prerelease moves no pointer.
+          if [[ "$tag" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Prerelease $tag: neither 'latest' nor 'webui' will be moved."
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
           echo "Publishing release $tag (${{ matrix.variant }})"
 
@@ -74,17 +83,24 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # The suffix applies to ALL generated tags, including latest, so the
-          # webui group never collides with the base group. A prerelease still
-          # moves neither `latest` nor `latest-webui`.
+          # base keeps the conventional moving pointer (`latest`); the webui
+          # variant publishes version tags with a `-webui` suffix but its moving
+          # pointer is the bare `webui` tag, the same convention multi-flavour
+          # images use on Docker Hub (no `latest-webui`).
+          #
+          # The suffix therefore lives in each semver pattern instead of
+          # flavor.suffix: flavor applies to EVERY generated tag, which would
+          # turn the `webui` pointer into `webui-webui`. `latest=false` stops
+          # the webui job from also pushing a plain `latest` that would race
+          # the base job for the same tag.
           flavor: |
-            latest=auto
-            ${{ matrix.variant == 'webui' && 'suffix=-webui,onlatest=true' || '' }}
-          # v1.2.3 -> 1.2.3, 1.2, latest (base) / the same with -webui (webui)
-          # v1.2.3-rc.1 -> 1.2.3-rc.1(-webui) only
+            latest=${{ matrix.variant == 'webui' && 'false' || 'auto' }}
+          # v1.2.3      -> 1.2.3, 1.2, latest           / 1.2.3-webui, 1.2-webui, webui
+          # v1.2.3-rc.1 -> 1.2.3-rc.1                   / 1.2.3-rc.1-webui
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}}${{ matrix.variant == 'webui' && '-webui' || '' }}
+            type=semver,pattern={{major}}.{{minor}}${{ matrix.variant == 'webui' && '-webui' || '' }}
+            type=raw,value=webui,enable=${{ matrix.variant == 'webui' && steps.release.outputs.prerelease == 'false' }}
 
       - name: Build and push ${{ matrix.variant }} (linux/amd64 + linux/arm64)
         id: build
