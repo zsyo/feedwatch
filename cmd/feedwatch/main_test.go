@@ -51,6 +51,32 @@ func TestChannelSpecsSingleChannel(t *testing.T) {
 	}
 }
 
+// NotifierSpec.Bcc is a pure addition for the webui variant's merged email.
+// The base configuration path must never populate it, so generated Resend
+// requests stay identical to the pre-Bcc behaviour.
+func TestChannelSpecsLeaveBccEmpty(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Notify.Channels = []config.ChannelConfig{
+		{Type: "log", Enabled: true},
+		{Type: "email", Enabled: true, Email: config.EmailConfig{
+			From: "FeedWatch <noreply@example.com>", To: []string{"a@example.com"},
+			APIKeyEnv: "RESEND_API_KEY",
+		}},
+	}
+	specs, err := channelSpecs(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 2 {
+		t.Fatalf("expected 2 specs, got %+v", specs)
+	}
+	for i, sp := range specs {
+		if len(sp.Bcc) != 0 {
+			t.Errorf("specs[%d].Bcc = %v, base path must leave it empty", i, sp.Bcc)
+		}
+	}
+}
+
 func TestChannelSpecsRejectsNoEnabledChannel(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Notify.Channels = []config.ChannelConfig{{Type: "log", Enabled: false}}
