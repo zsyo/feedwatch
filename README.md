@@ -293,7 +293,7 @@ docker run --rm -v feedwatch_feedwatch-data:/src -v "$PWD/data:/dst" alpine:3.21
 
 | | base | webui |
 | --- | --- | --- |
-| 镜像 tag | 无后缀 | 同版本号加 `-webui`（如 `latest-webui`） |
+| 镜像 tag | 版本号 / `latest` | 版本号加 `-webui`（如 `1.2.3-webui`），移动指针是 `webui` |
 | 配置来源 | 每次启动读 `config.yaml` | 首次把 `config.yaml` 当种子导入 SQLite，之后数据库是唯一来源 |
 | 界面 / 接口 | 无 | Vue 3 SPA + `/api/*`，默认监听 `:8080` |
 | 状态 | `data/state.json`（JSON 原子写） | SQLite WAL（`/app/data/feedwatch.db` 及 `-wal` / `-shm`） |
@@ -348,7 +348,7 @@ FEEDWATCH_DB_PATH=data/feedwatch.db FEEDWATCH_HTTP_ADDR=127.0.0.1:8080 ./feedwat
 
 ## 发布镜像（GitHub Actions / GHCR）
 
-`.github/workflows/docker-publish.yml` 在推送 `v*` tag 时用 `matrix.variant: [base, webui]` **并行产出两组**镜像，每组各自是 **linux/amd64 + linux/arm64** 双架构 manifest，发布到 GitHub Container Registry：`ghcr.io/zsyo/feedwatch`。不带后缀的 tag 是纯配置版，`-webui` 后缀的是带管理界面的变体；两组的 `latest` 是不同 digest。Docker 会按宿主机架构自动挑选 manifest，同一条 `pull` 命令在 x86 服务器和 ARM 板子上都能用。镜像名由 `${{ github.repository }}` 自动生成，fork 后会变成 `ghcr.io/<你的用户名>/feedwatch`，无需改 workflow。
+`.github/workflows/docker-publish.yml` 在推送 `v*` tag 时用 `matrix.variant: [base, webui]` **并行产出两组**镜像，每组各自是 **linux/amd64 + linux/arm64** 双架构 manifest，发布到 GitHub Container Registry：`ghcr.io/zsyo/feedwatch`。base 组沿用常规的版本号 tag 与 `latest`；webui 组是「版本号 + `-webui` 后缀」，它的移动指针是独立的 **`webui`** tag（而不是 `latest-webui`），两组的指针互不覆盖。Docker 会按宿主机架构自动挑选 manifest，同一条 `pull` 命令在 x86 服务器和 ARM 板子上都能用。镜像名由 `${{ github.repository }}` 自动生成，fork 后会变成 `ghcr.io/<你的用户名>/feedwatch`，无需改 workflow。
 
 ### 发布一个新版本
 
@@ -361,12 +361,12 @@ tag 必须是 `vMAJOR.MINOR.PATCH`（允许 `-rc.1` 一类后缀）；格式不�
 
 | Git tag | base 组镜像 tag | webui 组镜像 tag |
 | --- | --- | --- |
-| `v1.2.3` | `1.2.3`、`1.2`、`latest` | `1.2.3-webui`、`1.2-webui`、`latest-webui` |
-| `v1.2.3-rc.1` | `1.2.3-rc.1` | `1.2.3-rc.1-webui`（预发布不移动任何 `latest`） |
+| `v1.2.3` | `1.2.3`、`1.2`、`latest` | `1.2.3-webui`、`1.2-webui`、`webui` |
+| `v1.2.3-rc.1` | `1.2.3-rc.1` | `1.2.3-rc.1-webui`（预发布只新增自己的 tag，不移动任何指针） |
 
-> 本节里的 `v1.2.3` / `1.2.3` 都只是示意，不代表某个已发布版本。通用规则：base 组按 `{{version}}` / `{{major}}.{{minor}}` / `latest` 生成，webui 组用同样的规则再加 `-webui` 后缀。每次正式发版两组都会新增完整版本号 tag，并各自移动自己的 `<主版本>.<次版本>` 与 `latest`；预发布只新增自己的 tag，两组的 `latest` 都不动。已发布的具体版本以仓库 Releases / GHCR package 的 tag 列表为准，固定版本时用 `docker pull ghcr.io/zsyo/feedwatch:<版本>` 或 `docker pull ghcr.io/zsyo/feedwatch:<版本>-webui`。
+> 本节里的 `v1.2.3` / `1.2.3` 都只是示意，不代表某个已发布版本。通用规则：base 组按 `{{version}}` / `{{major}}.{{minor}}` / `latest` 生成，webui 组把前两者加 `-webui` 后缀，移动指针固定叫 `webui`。每次正式发版两组都会新增完整版本号 tag，并各自移动自己的指针（base 的 `latest`、webui 的 `webui`），`<主版本>.<次版本>` 只跟随各自的版本号；预发布只新增自己的 tag，两个指针都不动。已发布的具体版本以仓库 Releases / GHCR package 的 tag 列表为准，固定版本时用 `docker pull ghcr.io/zsyo/feedwatch:<版本>` 或 `docker pull ghcr.io/zsyo/feedwatch:<版本>-webui`。
 
-CI 用 `matrix.variant` 切换 `file:`（`Dockerfile` / `Dockerfile.webui`），webui 组的 metadata-action 追加 `suffix=-webui,onlatest=true`；两组 layer cache 按 variant 隔离，互不挤占。tag 通过 `-ldflags "-X main.version=..."` 注入二进制，容器内 `./feedwatch -version` 能直接看到版本。**无需配置任何额外 secret**：用内置 `GITHUB_TOKEN` + `packages: write` 登录 GHCR，构建缓存走 GitHub Actions cache。
+CI 用 `matrix.variant` 切换 `file:`（`Dockerfile` / `Dockerfile.webui`）。webui 组的 `-webui` 后缀直接写在每个 semver pattern 里（`{{version}}-webui`），移动指针由 `type=raw,value=webui` 单独给出：metadata-action 的 `flavor.suffix` 会作用到**所有**生成的 tag，用它加后缀会把指针写成 `webui-webui`；同时 webui 组设 `latest=false`，避免它和 base 组抢同一个 `latest` tag。两组 layer cache 按 variant 隔离，互不挤占。tag 通过 `-ldflags "-X main.version=..."` 注入二进制，容器内 `./feedwatch -version` 能直接看到版本。**无需配置任何额外 secret**：用内置 `GITHUB_TOKEN` + `packages: write` 登录 GHCR，构建缓存走 GitHub Actions cache。
 
 ### 直接使用预构建镜像（服务器无需源码、无需本地编译）
 
@@ -380,16 +380,16 @@ docker run -d --name feedwatch \
   ghcr.io/zsyo/feedwatch:latest
 ```
 
-WebUI 变体换成带 `-webui` 的 tag，多映射一个端口并用自己的数据卷；首次启动的管理员密码只在日志里打印一次：
+WebUI 变体用 `webui` 指针 tag（或换成固定的 `1.2.3-webui`），多映射一个端口并用自己的数据卷；首次启动的管理员密码只在日志里打印一次：
 
 ```bash
-docker pull ghcr.io/zsyo/feedwatch:latest-webui
+docker pull ghcr.io/zsyo/feedwatch:webui
 docker run -d --name feedwatch-webui \
   -p 8080:8080 \
   -e RESEND_API_KEY="re_xxx" \
   -v "$PWD/config.yaml:/app/config.yaml:ro" \
   -v feedwatch-webui-data:/app/data \
-  ghcr.io/zsyo/feedwatch:latest-webui
+  ghcr.io/zsyo/feedwatch:webui
 docker logs -f feedwatch-webui
 ```
 
@@ -420,7 +420,7 @@ services:
     # build: .                             # 删除这一行
 ```
 
-然后 `docker compose pull && docker compose up -d`。WebUI 变体对应独立的 `docker-compose.webui.yml`：把 `image` 换成 `ghcr.io/zsyo/feedwatch:latest-webui` 并删掉 `build:` 段，`ports` / 独立数据卷 / `environment` 原样保留。
+然后 `docker compose pull && docker compose up -d`。WebUI 变体对应独立的 `docker-compose.webui.yml`：把 `image` 换成 `ghcr.io/zsyo/feedwatch:webui` 并删掉 `build:` 段，`ports` / 独立数据卷 / `environment` 原样保留。
 
 ### 双架构是怎么构建的
 
