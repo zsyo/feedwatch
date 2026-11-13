@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"feedwatch/internal/config"
+	"feedwatch/internal/domain"
 	"feedwatch/internal/notifier"
 	emailnotify "feedwatch/internal/notifier/email"
 	lognotify "feedwatch/internal/notifier/log"
@@ -189,5 +193,87 @@ func TestNotifyLabel(t *testing.T) {
 	}
 	if got := notifyLabel(cfg, true); got != "log (dry-run)" {
 		t.Errorf("dry-run label = %q", got)
+	}
+}
+
+// stampNotifier records the moment it was sent to, so tests can observe the
+// pacing that buildNotifier wraps around real channels.
+type stampNotifier struct {
+	typ string
+	hit func()
+}
+
+func (s stampNotifier) Type() string { return s.typ }
+
+func (s stampNotifier) Send(context.Context, domain.Notification) error {
+	s.hit()
+	return nil
+}
+
+// stampRegistry registers each type as a stampNotifier sharing one recorder.
+func stampRegistry(types ...string) *notifier.Registry {
+	var (
+		mu    sync.Mutex
+		stamp []time.Time
+	)
+	reg := notifier.NewRegistry()
+	for _, typ := range types {
+		reg.Register(typ, func(_ notifier.NotifierSpec, _ *slog.Logger) (notifier.Notifier, error) {
+			return stampNotifier{typ: typ, hit: func() {
+				mu.Lock()
+				defer mu.Unlock()
+				stamp = append(stamp, time.Now())
+			}}, nil
+		})
+	}
+	return reg
+}
+
+// Different channel types are different services with independent quotas, so a
+// fan-out across types must not be delayed by the spacing of the previous
+// type. This is the base equivalent of the per-type gates used by the webui
+// orchestrator.
+func TestBuildNotifierDoesNotPaceAcrossChannelTypes(t *testing.T) {
+	const spacing = 150 * time.Millisecond
+	cfg := baseConfig()
+	cfg.Notify.SendSpacing = config.Duration(spacing)
+	cfg.Notify.Channels = []config.ChannelConfig{
+		{Type: "fake_a", Enabled: true},
+		{Type: "fake_b", Enabled: true},
+	}
+	n, err := buildNotifier(cfg, stampRegistry("fake_a", "fake_b"), false, quietLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := n.Send(context.Background(), domain.Notification{Kind: domain.KindNewReleases}); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed >= spacing {
+		t.Fatalf("fan-out across two channel types took %v with spacing %v: "+
+			"the types are still sharing one gate", elapsed, spacing)
+	}
+}
+
+// Channels of the SAME type share one service quota, so the spacing must still
+// apply between them even though their types differ from every other gate.
+func TestBuildNotifierStillPacesWithinOneChannelType(t *testing.T) {
+	const spacing = 150 * time.Millisecond
+	cfg := baseConfig()
+	cfg.Notify.SendSpacing = config.Duration(spacing)
+	cfg.Notify.Channels = []config.ChannelConfig{
+		{Type: "fake_a", Name: "群一", Enabled: true},
+		{Type: "fake_a", Name: "群二", Enabled: true},
+	}
+	n, err := buildNotifier(cfg, stampRegistry("fake_a"), false, quietLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := n.Send(context.Background(), domain.Notification{Kind: domain.KindNewReleases}); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed < spacing {
+		t.Fatalf("two channels of the same type were sent %v apart, want >= %v", elapsed, spacing)
 	}
 }

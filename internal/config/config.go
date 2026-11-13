@@ -73,8 +73,9 @@ type StoreConfig struct {
 // here mirrors the top of config.example.yaml.
 type NotifyConfig struct {
 	Mode string `yaml:"mode"` // global, channel-independent
-	// SendSpacing paces every channel delivery across all batches. It matters
-	// most for per_feed mode, where one cycle can produce many notifications.
+	// SendSpacing paces deliveries within one channel TYPE: every type gets its
+	// own gate, so a throttled provider cannot delay an unrelated one. It
+	// matters most for per_feed mode, where one cycle produces many batches.
 	SendSpacing      Duration          `yaml:"send_spacing"`
 	SubjectPrefix    string            `yaml:"subject_prefix"`
 	Options          map[string]string `yaml:"options"`

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"feedwatch/internal/config"
 	"feedwatch/internal/filter"
@@ -138,11 +139,29 @@ func channelSpecs(cfg config.Config) ([]notifier.NotifierSpec, error) {
 	return specs, nil
 }
 
+// typeGates hands out one pace.Gate per channel type, creating each on first
+// use. Concurrency 1 keeps deliveries serial (as before); the spacing is the
+// explicit cap. Gates are never shared across types on purpose: see
+// buildNotifier for why.
+func typeGates(spacing time.Duration) func(channelType string) *pace.Gate {
+	gates := make(map[string]*pace.Gate, 4)
+	return func(channelType string) *pace.Gate {
+		if g, ok := gates[channelType]; ok {
+			return g
+		}
+		g := pace.New(1, spacing)
+		gates[channelType] = g
+		return g
+	}
+}
+
 func buildNotifier(cfg config.Config, reg *notifier.Registry, dryRun bool, log *slog.Logger) (notifier.Notifier, error) {
-	// One gate is shared by EVERY channel: a cycle with many per_feed batches
-	// and several channels cannot burst an IM/email API. Concurrency 1 keeps
-	// deliveries serial (as before); the spacing is the new, explicit cap.
-	sendGate := pace.New(1, cfg.Notify.SendSpacing.D())
+	// One gate PER CHANNEL TYPE, not one for everything. Each provider is a
+	// separate service with its own quota, so a throttled or slow Telegram send
+	// must not delay an email that shares nothing with it. Channels of the same
+	// type still share a single gate, which is what stops a per_feed burst from
+	// hammering one API. With spacing=0 the gates are pass-through.
+	gateFor := typeGates(cfg.Notify.SendSpacing.D())
 	if dryRun {
 		// Dry-run replaces the entire fan-out, so no channel can send for real.
 		n, err := reg.Build(notifier.NotifierSpec{
@@ -151,7 +170,7 @@ func buildNotifier(cfg config.Config, reg *notifier.Registry, dryRun bool, log *
 		if err != nil {
 			return nil, err
 		}
-		return notifier.Pace(n, sendGate), nil
+		return notifier.Pace(n, gateFor("log")), nil
 	}
 	specs, err := channelSpecs(cfg)
 	if err != nil {
@@ -163,7 +182,7 @@ func buildNotifier(cfg config.Config, reg *notifier.Registry, dryRun bool, log *
 		if err != nil {
 			return nil, fmt.Errorf("build notifier %q: %w", sp.Type, err)
 		}
-		built = append(built, notifier.Pace(n, sendGate))
+		built = append(built, notifier.Pace(n, gateFor(sp.Type)))
 	}
 	if len(built) == 1 {
 		return built[0], nil

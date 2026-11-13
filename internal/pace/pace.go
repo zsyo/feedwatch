@@ -7,8 +7,9 @@
 //     single upstream host instead of letting a burst of N goroutines fire
 //     simultaneously.
 //
-// Both limits are process-wide for a given Gate, so sharing one Gate between
-// all feed fetches (or all notification channels) gives a global cap.
+// Both limits are process-wide for a given Gate: one Gate shared by all feed
+// fetches gives a global fetch cap, while notifier deliveries use one Gate per
+// channel type so unrelated providers never block each other.
 package pace
 
 import (

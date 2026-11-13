@@ -7,10 +7,12 @@ import (
 	"feedwatch/internal/pace"
 )
 
-// paced wraps ONE channel so every delivery shares a process-wide rate limit
-// with all other channels and all notification batches. The watcher only sees
-// a normal Notifier; pacing therefore also applies when several channels are
-// fanned out by Multi, or when mode=per_feed produces many batches in a cycle.
+// paced wraps ONE channel so every delivery through it shares the gate it was
+// given. Sharing one gate across several channels caps them together; the
+// composition root instead hands each channel type its own gate, so unrelated
+// services never block each other. The watcher only sees a normal Notifier;
+// pacing therefore also applies when several channels are fanned out by Multi,
+// or when mode=per_feed produces many batches in a cycle.
 type paced struct {
 	inner Notifier
 	gate  *pace.Gate

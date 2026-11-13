@@ -29,8 +29,9 @@ notify:
   mode: digest           # digest (one push per cycle) | per_feed (one per project)
                          # 每条通知都会发给所有 enabled 渠道；首轮基线始终是 1 条汇总
                          # per_feed 的标题会带上项目名；失败的批次只重试该项目
-  send_spacing: 250ms    # 两次渠道投递之间的最小间隔（全局共享，0s 关闭）
-                         # per_feed + 多 feed + 多渠道时，防止短时间内打满 IM/邮件 API
+  send_spacing: 250ms    # 两次「同类型」渠道投递之间的最小间隔（每个渠道类型一个门，0s 关闭）
+                         # per_feed + 多 feed + 多渠道时，防止短时间内打满某个 IM/邮件 API；
+                         # 不同类型之间互不阻塞（email 慢不会拖住 telegram）
   # subject_prefix: "[FeedWatch]"   # 所有渠道共用的标题前缀，可省略
   # options: {}          # 所有渠道共享的默认值，被各渠道 options 覆盖
   #                      # 值里的 ${ENV_VAR} 启动时展开，缺失会直接报出变量名
