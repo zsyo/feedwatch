@@ -26,7 +26,7 @@
 | HTTP 304 | 不做 diff、不改写已见集合、不发通知 |
 | 预发布 / 非版本标签 | 默认不通知（`go1.27rc3`、`v3.16.0a1`、CPython 的 `3.10` 分支 tag 等），但 ID 仍记为已见 |
 | 状态目录不可写（如 bind mount 权限不对） | **启动即失败**：`jsonfile.New` 在启动期用 `CreateTemp` 探测一次并立刻删除，不会先发通知再发现存不下 |
-| 订阅很多 feed / 一轮很多通知 | 抓取受 `poll.concurrency` 有界并发 + `poll.request_spacing` 限速；渠道投递受 `notify.send_spacing` 全局限速，见[并发与频率控制](#并发与频率控制) |
+| 订阅很多 feed / 一轮很多通知 | 抓取受 `poll.concurrency` 有界并发 + `poll.request_spacing` 限速；渠道投递受 `notify.send_spacing` 限速（**按渠道类型**，同类型共用一个门），见[并发与频率控制](#并发与频率控制) |
 
 > 去重只认 Atom `<id>`，不是版本号。GitHub 的 feed 只保留最近约 10 条，长时间停机漏掉的中间版本不会补发——这是预期行为。
 
@@ -116,12 +116,12 @@ feeds:
 
 `per_feed` 的多个批次是**独立提交**的：某一批发送失败时，只有该批涉及的 feed 不写状态，已成功送达的 feed 照常提交，下一轮不会重复推送它们。注意 `per_feed` 是「按项目分组」而不是「按版本」——同项目一轮出 3 个新版本仍合成 1 条。
 
-`subject_prefix` 是所有渠道共用的标题前缀（可在渠道的 `options.subject_prefix` 覆盖），`notify.options` 是所有渠道共享的默认值，会被各渠道自己的 `options` 覆盖。`notify.send_spacing` 控制两次渠道投递之间的最小间隔，见[并发与频率控制](#并发与频率控制)。
+`subject_prefix` 是所有渠道共用的标题前缀（可在渠道的 `options.subject_prefix` 覆盖），`notify.options` 是所有渠道共享的默认值，会被各渠道自己的 `options` 覆盖。`notify.send_spacing` 控制两次渠道投递之间的最小间隔，**每个渠道类型各一个限速门**（email / telegram / wecom …互不影响），见[并发与频率控制](#并发与频率控制)。
 
 ```yaml
 notify:
   mode: digest                      # 全局，与通道无关：digest | per_feed
-  send_spacing: 250ms               # 全局：两次渠道投递之间的最小间隔（0s 关闭）
+  send_spacing: 250ms               # 一个值，按渠道类型各一个限速门（0s 关闭）
   subject_prefix: "[FeedWatch]"     # 全局：所有渠道共用的标题前缀（可省略）
   on_partial_failure: best_effort   # best_effort(默认) | strict
   options:                         # 所有渠道共享的默认值
@@ -199,7 +199,7 @@ watcher 的语义是「某条通知返回错误 → 该批次涉及的 feed 不�
 | --- | --- | --- |
 | 轮询周期 | `poll.interval: 30m` | 一个 feed 每轮最多请求 1 次；`Run()` 串行调用 `RunOnce`，两个周期绝不重叠。配合 ETag/304，未变化的 feed 只有一个 304 往返 |
 | 抓取并发与限速 | `poll.concurrency: 4`、`poll.request_spacing: 100ms` | 有界 worker pool：最多 4 个 feed 同时在抓；两次请求**发起**至少隔 100ms，即全局约 10 req/s。单个慢 feed（含重试退避）不再阻塞排在后面的 feed |
-| 通知限速 | `notify.send_spacing: 250ms` | 所有渠道共享一个限速门，每次「渠道投递」占一个名额，约 4 次/秒。`Multi` 扇出本来就是串行的，所以连同一条通知里的多通道也不会连发 |
+| 通知限速 | `notify.send_spacing: 250ms` | **按渠道类型**各一个限速门：同一类型的多次投递至少隔 250ms（约 4 次/秒），不同服务互不阻塞。`Multi` 扇出本身就是串行的，`per_feed` 的多批次、多个同类型渠道都共用该类型的门 |
 
 ```yaml
 poll:
@@ -214,7 +214,8 @@ notify:
 几点说明：
 
 - **原先是隐式全串行**（并发上限就是 1），既没有可配置项，慢 feed 也会拖住后面的 feed；现在改成显式、可调、有上界的。`poll.concurrency: 1` + 两个 spacing 设 `0s` 即可回到旧行为。
-- 限速是**全局**的，不按 host 分组；feed 分散在不同域名时偏保守，但上限明确、实现简单。抓取结果按 `feeds[]` 顺序写入各自下标，所以 diff、通知顺序、状态提交都与并发度无关。
+- 抓取限速是**全局**的，不按 host 分组；feed 分散在不同域名时偏保守，但上限明确、实现简单。抓取结果按 `feeds[]` 顺序写入各自下标，所以 diff、通知顺序、状态提交都与并发度无关。
+- 通知限速按**渠道类型**分组：`email`、`telegram`、`wecom` …各有独立的一个门，某个服务被限流不会拖慢另一个。同一类型的所有渠道（例如两个邮件渠道）仍然共用该类型的门，所以一个 `per_feed` 批次同时投递给它们时不会连发。类型之间不互相等待，一条通知扇出到 N 种渠道也不会被叠加成 `N × spacing`。
 - `N` 个 feed 的一轮最短耗时约 `N × request_spacing`。feed 极多时要保证它明显小于 `poll.timeout`（默认 2m），否则调大 `timeout` / 调小或关闭 spacing：超时后未抓完的 feed 本轮跳过、状态不提交，**不会误发通知**，但下一轮仍按 `feeds[]` 顺序从头开始，末尾的 feed 会长期轮不到。
 - 状态写入使用独立的 10s 超时，不受 `poll.timeout` 影响：已经送达的批次不会因为本轮超时而丢掉提交、进而在下一轮重复推送。
 - HTTP 层原有的保护仍在：`429` / `5xx`、网络错误按指数退避重试，并尊重 `Retry-After`（含 Telegram `parameters.retry_after`、`X-RateLimit-Reset`）。限速门负责**主动削峰**，退避负责**被动应对**。
@@ -446,7 +447,7 @@ internal/notifier/template/   go:embed 邮件与 IM 消息模板（基线 / 新�
 internal/notifier/email/      Resend 实现
 internal/notifier/log/        日志通知器（本地调试 / dry-run）
 internal/notifier/webhook/    共享 HTTP 引擎 + 10 个渠道 Adapter（每个渠道一个文件）
-internal/pace/                有界并发 + 最小间隔的共享限速门
+internal/pace/                有界并发 + 最小间隔的限速门（抓取全局一个，投递按渠道类型各一个）
 internal/store/               StateStore 接口 / Registry
 internal/store/jsonfile/      JSON 原子写状态 + 启动期可写性预检
 internal/watcher/             base 核心编排：有界并发抓取 → 过滤 → diff → 分批通知 → 按批次提交（webui 不改动它）
@@ -505,8 +506,8 @@ actionlint .github/workflows/docker-publish.yml
 - GitHub feed 未认证访问有限流；默认 30 分钟 × 3 个源约 6 次/小时，并启用 ETag/304、`poll.concurrency` / `request_spacing` 削峰与指数退避。
 - `From` 必须是 Resend 已验证域名，否则发送会 403。
 - `best_effort` 策略下，某个渠道持续失败会丢弃该渠道的后续通知（只留 ERROR 日志），以保证其它渠道不被重复轰炸；要求不漏推送请改用 `strict`。
-- 各渠道都有自己的频率上限（企业微信 / 钉钉 20 条/分钟，飞书 100 条/分钟且 5 条/秒，Telegram 同一会话约 1 条/秒，Teams 4 次/秒；Resend 默认 10 次/秒/团队）。默认 30 分钟轮询 + 一轮一条 digest 远低于上限；`notify.send_spacing` 默认 250ms 只是通用保护，把 `mode` 改成 `per_feed`、加很多渠道或缩短间隔时仍需按最严格的那个渠道调整。
-- 限速是全局的、不区分域名；也不做跨轮次的配额预算（每个周期独立计算）。
+- 各渠道都有自己的频率上限（企业微信 / 钉钉 20 条/分钟，飞书 100 条/分钟且 5 条/秒，Telegram 同一会话约 1 条/秒，Teams 4 次/秒；Resend 默认 10 次/秒/团队）。默认 30 分钟轮询 + 一轮一条 digest 远低于上限；`notify.send_spacing` 默认 250ms 只是每种渠道类型的通用保护，把 `mode` 改成 `per_feed`、同一类型加很多渠道或缩短间隔时仍需按该类型最严格的限制调整。
+- 抓取限速是全局的、不区分域名；通知限速按渠道类型；两者都不做跨轮次的配额预算（每个周期独立计算）。
 - 状态文件损坏时程序会报错并跳过该轮，**不会**静默当作首轮重发基线邮件；需人工检查 `data/state.json`。
 - WebUI 的「全局设置」写入数据库后需**重启进程**才生效；`FEEDWATCH_WEBUI_COOKIE_SECURE` / `FEEDWATCH_WEBUI_SESSION_TTL` 只在启动时读环境变量，页面里标为只读。
 - WebUI 变体的 `-dry-run` 无意义（会被忽略并记一条日志），`-once` 只跑一轮「抓取 → 生成投递计划 → 投递」后退出。
