@@ -375,11 +375,22 @@ FEEDWATCH_DB_PATH=data/feedwatch.db FEEDWATCH_HTTP_ADDR=127.0.0.1:8080 ./feedwat
 ./feedwatch-webui.exe -once      # 离线冒烟：抓一轮 → 生成投递计划 → 投递一轮后退出
 ```
 
+PowerShell 里用等价的 `web/build.ps1`（Windows PowerShell 5.1 与 PowerShell 7 都可），不需要 `sh` / MSYS 环境：
+
+```powershell
+.\web\build.ps1                  # 产物同样写入 internal\webui\embedded\
+.\web\build.ps1 -SkipDeps        # 完全不碰依赖（等价 FW_SKIP_DEPS=1）
+.\web\build.ps1 -ForceDeps       # 强制 npm ci，会重写 node_modules（等价 FW_FORCE_DEPS=1）
+.\web\build.ps1 -OutDir .\out    # 换输出目录
+```
+
+这两个入口共用同一套指纹与 `BUILD_ID` 规则，可以随意交替使用：在 `sh` 下装好的依赖，用 `ps1` 构建时不会被判定过期，反之亦然。
+
 WebUI 变体**不接受 `-config`**：传了只会记一条 `-config is ignored; the WebUI variant is configured entirely in the browser` 然后继续；`-dry-run` 同样无意义。干净 clone 下 `-tags webui` 也能编译，页面只显示占位提示（仓库只提交 `embedded/stub.html`），真实前端由 `make build-webui` 或 `Dockerfile.webui` 的 Node stage 生成。
 
-前端构建需要 Node **22.12+**（Vite 8 的 `engines` 要求，`node:22-alpine` 已满足）；依赖版本见 `web/package.json`，`npm run typecheck` 可单独跑 `tsc --noEmit`。改完前端依赖后记得重新 `sh web/build.sh` 再跑 `go build -tags webui`，否则嵌进去的还是旧产物。
+前端构建需要 Node **22.12+**（Vite 8 的 `engines` 要求，`node:22-alpine` 已满足）；依赖版本见 `web/package.json`，`npm run typecheck` 可单独跑 `tsc --noEmit`。改完前端依赖后记得重新跑一次构建脚本（`sh web/build.sh` 或 `web/build.ps1`）再跑 `go build -tags webui`，否则嵌进去的还是旧产物。
 
-`sh web/build.sh` **不再每次重建 `node_modules`**：它把 `package.json` / `package-lock.json` 的内容和 Node 平台（`platform-arch-abi`）一起做指纹存进 `web/node_modules/.cache/feedwatch-deps`，指纹没变就直接跳过安装；变了才 `npm install` 增量补齐（同一目录在 Windows 与 WSL 之间切换时平台指纹不同，会各自补齐对应平台的二进制包）。只有目录不存在或显式 `FW_FORCE_DEPS=1` 时才走 `npm ci` 全量重装，`FW_SKIP_DEPS=1` 则完全不碰依赖。
+`sh web/build.sh` 与 `web/build.ps1` **不再每次重建 `node_modules`**：它们把 `package.json` / `package-lock.json` 的内容和 Node 平台（`platform-arch-abi`）一起做指纹存进 `web/node_modules/.cache/feedwatch-deps`，指纹没变就直接跳过安装；变了才 `npm install` 增量补齐（同一目录在 Windows 与 WSL 之间切换时平台指纹不同，会各自补齐对应平台的二进制包）。只有目录不存在或显式 `FW_FORCE_DEPS=1`（ps1 是 `-ForceDeps`）时才走 `npm ci` 全量重装，`FW_SKIP_DEPS=1`（ps1 是 `-SkipDeps`）则完全不碰依赖。
 
 产物里的 `BUILD_ID`（`/api/meta` 的 `build_id`，侧边栏与概览页都显示）形如 `11142242-2f04086`：构建机本地时间的月日时分 + git 短哈希，不含秒，便于一眼比对两次构建（镜像构建跑在 UTC 下，所以 Docker 产物的时间戳是 UTC）。
 
@@ -545,7 +556,7 @@ internal/webui/auth/          bcrypt 密码、session、CSRF
 internal/webui/api/           HTTP server、中间件链、/api/* 端点与 SPA 静态服务
 internal/webui/orchestrator/  多租户轮询：URL 去重池、每用户策略分流、独立投递与按渠道类型限速
 internal/webui/embedded/      只提交 stub.html / .gitkeep，真实产物由构建生成且 gitignore
-web/                         Vue 3 + Vite + TS 源码与 build.sh
+web/                         Vue 3 + Vite + TS 源码，构建脚本 build.sh / build.ps1
 testdata/                     测试用 feed 夹具
 ```
 
@@ -575,7 +586,7 @@ go test -race -count=1 -tags webui ./...
 go vet -tags webui ./...
 go build ./... && go build -tags webui ./...
 go list -deps ./cmd/feedwatch | grep -E 'modernc|/webui|database/sql'   # 应无输出
-sh web/build.sh                 # 生成前端资源后才能看到真实页面
+sh web/build.sh                 # 生成前端资源后才能看到真实页面（PowerShell 用 .\web\build.ps1）
 ```
 
 单元测试用 `httptest` 内存网络模拟 feed 与各渠道 webhook（200/204/202/304/429/5xx/畸形 XML/厂商错误码）、临时文件测状态原子写、fake sender 测 Resend 请求（含多收件人合并成 1 次调用）、可编程 fake source 覆盖 watcher 的首轮基线 / 重启静默 / 失败重试 / 单 feed 隔离 / 304 语义 / `per_feed` 部分批次失败只重试失败项目 / 基线固定汇总 / 抓取并发上限；另有 `pace` 限速门的确定性时钟用例、飞书/钉钉 HMAC 签名向量、环境变量展开、扇出失败策略的回归用例。`go test -race` 可覆盖新的并发路径。**测试不会发出真实邮件或真实群消息**。
