@@ -2,7 +2,7 @@
 
 一个 Go 常驻程序：按配置轮询 `releases.atom`，发现**新的稳定版本**后推送通知。通知渠道支持 Resend 邮件，以及企业微信、飞书、钉钉、Telegram、Slack、Discord、Teams、Bark、ntfy 和通用 Webhook，**可同时推送到多个渠道**。数据源、通知渠道、状态存储都是可插拔接口（当前数据源仍只有 Atom）。
 
-**两种镜像变体**：不带后缀的 base 镜像保持纯 `config.yaml` 手动配置（无前端资源、无 HTTP 服务、无 SQLite）；`-webui` 变体额外提供多用户 Web 管理界面、登录鉴权与 SQLite 存储。两者由同一个 `//go:build webui` 开关隔离，base 二进制不链接任何 WebUI / SQLite 代码，详见 [WebUI 变体](#webui-变体)。
+**两种镜像变体**：不带后缀的 base 镜像保持纯 `config.yaml` 手动配置（无前端资源、无 HTTP 服务、无 SQLite）；`-webui` 变体额外提供多用户 Web 管理界面、登录鉴权与 SQLite 存储，**空库启动、不需要任何配置文件**，首个管理员密码在容器日志里打印一次。两者由同一个 `//go:build webui` 开关隔离，base 二进制不链接任何 WebUI / SQLite 代码，详见 [WebUI 变体](#webui-变体)。
 
 当前默认监控三个仓库（均已验证可用）：
 
@@ -314,57 +314,76 @@ rootless 还有两点差异：容器绑不了 1024 以下端口（默认 8080 �
 | | base | webui |
 | --- | --- | --- |
 | 镜像 tag | 版本号 / `latest` | 版本号加 `-webui`（如 `1.2.3-webui`），移动指针是 `webui` |
-| 配置来源 | 每次启动读 `config.yaml` | 首次把 `config.yaml` 当种子导入 SQLite，之后数据库是唯一来源 |
+| 配置来源 | 每次启动读 `config.yaml` | **不读 `config.yaml`**：空库启动，订阅 / 通知方式 / 密钥全部在页面里配 |
 | 界面 / 接口 | 无 | Vue 3 SPA + `/api/*`，默认监听 `:8080` |
-| 状态 | `data/state.json`（JSON 原子写） | SQLite WAL（`/app/data/feedwatch.db` 及 `-wal` / `-shm`） |
+| 状态 | `data/state.json`（JSON 原子写） | SQLite WAL（`/app/data/feedwatch.db` 及 `-wal` / `-shm`）+ `secret.key` |
 | 用户 | 单用户（配置即全部订阅） | 多用户 + 管理员，订阅与渠道按用户隔离 |
+| 密钥来源 | 环境变量（`${ENV_VAR}` 展开） | 页面填写，AES-256-GCM 加密后存库，不可回读 |
 
 > **二选一运行**：不要同时启动 `docker-compose.yml` 与 `docker-compose.webui.yml`。两套各有独立的轮询器与状态，会针对同一批 release 各发一遍通知。
 
 ### 启动
 
 ```bash
-cp config.example.yaml config.yaml     # 首次种子来源，之后可不再修改
-cp .env.example .env                   # 填渠道密钥；WebUI 段可按需调整
+cp .env.example .env                   # 可选；渠道密钥不在这里配
 docker compose -f docker-compose.webui.yml up -d --build
 docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里打印一次
 ```
 
-浏览器打开 `http://<宿主机>:8080`（端口由 `.env` 的 `WEBUI_HTTP_PORT` 控制）。用日志里的 `admin` 密码登录，**首次登录会被强制改密**；改密后所有旧会话立即失效。管理员可在「用户管理」里新建账号或重置密码（新密码只在页面上显示一次）。
+**不需要 `config.yaml`，也不需要任何渠道密钥变量**：容器首启就是一个干净的空库，只有 `users` 表里那条 `admin` 记录加一套默认设置。浏览器打开 `http://<宿主机>:8080`（端口由 `.env` 的 `WEBUI_HTTP_PORT` 控制），用日志里的 `admin` 密码登录，**首次登录会被强制改密**；改密后所有旧会话立即失效。管理员可在「用户管理」里新建账号或重置密码（新密码只在页面上显示一次）。
 
 若经 HTTPS 反向代理访问，把 `.env` 的 `FEEDWATCH_WEBUI_COOKIE_SECURE` 设为 `true`；纯 HTTP 直连时务必保持 `false`，否则会话 cookie 带 `Secure` 标志、浏览器不会回传，导致无法登录。会话有效期由 `FEEDWATCH_WEBUI_SESSION_TTL` 控制（默认 `168h`）。
 
-### 数据与配置的关系
+### 身份与权限
 
-- 空库（仅 `users` 表为空）时把 `config.yaml` 的 `feeds` / `channels` / 全局设置导入 SQLite，并生成一条基线通知；**之后改 `config.yaml` 不会影响已有数据**，订阅、渠道、设置都在页面里管理。
-- 数据库在命名卷 `feedwatch-webui-data:/app/data`。SQLite WAL 需要**目录**可写，启动期有和 base 一样的 `CreateTemp` 预检；把卷换成 bind mount 时同样用 `.env` 里的 `FW_UID` / `FW_GID` 指定宿主机属主——**rootless Docker 例外**，此时容器的 uid 不是宿主 uid，要么保留命名卷，要么写 `user: "0:0"`，见 [rootless Docker 下的 uid 映射](#rootless-docker-下的-uid-映射)。
+| | 管理员（`admin`） | 普通用户 |
+| --- | --- | --- |
+| 订阅 / 通知方式 | **看不到入口**，直接调接口返回 403 `role_not_allowed` | 增删改自己的订阅与渠道 |
+| 渠道密钥 | 只能看到「已配置 / 缺失」与脱敏后的主机名 | 只能看到自己填过哪些字段，值永远不回显 |
+| 他人数据 | 只读下钻：订阅、渠道、投递记录 | 无 |
+| 他人资源启停 | 可停用 / 恢复某个订阅或渠道，**不能改内容** | 无 |
+| 用户管理 | 新建用户、重置密码、停用账号 | 只能改自己的密码 |
+
+**想给自己配订阅，就新建一个普通用户**：管理员刻意被挡在业务配置之外，运维账号与订阅账号不会混在一起，管理员也无法借权限读到别人的 webhook / token。下钻页面的写操作只接受 `{"enabled": bool}`，多传一个字段即 400 `admin_readonly`。
+
+### 数据、主密钥与备份
+
+- 数据库与主密钥都在命名卷 `feedwatch-webui-data:/app/data`。SQLite WAL 需要**目录**可写，启动期有和 base 一样的 `CreateTemp` 预检；把卷换成 bind mount 时同样用 `.env` 里的 `FW_UID` / `FW_GID` 指定宿主机属主——**rootless Docker 例外**，此时容器的 uid 不是宿主 uid，要么保留命名卷，要么写 `user: "0:0"`，见 [rootless Docker 下的 uid 映射](#rootless-docker-下的-uid-映射)。
+- **`secret.key` 与数据库必须一起备份、一起丢弃**。首启用 `O_CREATE|O_EXCL` 生成 32 字节（0600），做渠道密钥的信封加密：`fwsec:v1:` + `base64.RawURLEncoding(nonce ‖ ciphertext ‖ tag)`，AAD 绑定渠道 id，把密文复制到别的渠道行也解不开。读失败**绝不重新生成**（那会让已存凭据全部变成无法解密的垃圾），而是启动即报错并给出三条补救路径；长度或 base64 不合法同样直接拒绝。想自己托管就设 `FEEDWATCH_WEBUI_SECRET_KEY`（标准 base64 的 32 字节），它覆盖密钥文件，**设过之后不要再换**。
 - 新用户新增订阅从当前全局 seen 集合建立基线，**不会补发历史版本**；删除后重新订阅也一样。
 - 「全局设置」页可改轮询间隔、超时、并发、抓取/发送间隔、HTTP 参数等；服务端逐项校验后写库，**重启进程后生效**（不热更新）。
 - `webui.cookie_secure` / `webui.session_ttl` 是环境变量控制的只读项；`notify.mode` 在多租户模式下是每条订阅自己的 `mode`（`digest` / `per_feed`），不再是全局开关。
+- 渠道表单由服务端下发：`GET /api/channel-fields` 返回每种渠道的字段表（键名、必填、类型、选项、是否密钥），前端按 schema 渲染。新增一种渠道只需改 `internal/webui/channelspec.go` 的 `ChannelFields`，页面不用动。
 
 ### 通知语义
 
 - 同一 URL 全局每轮只抓一次（`url_key = sha256(规范化 URL)`），抓完按每个用户各自的过滤条件、`always` / `on_update` 与 `digest` / `per_feed` 分流。
-- **不做跨用户合并**：每个用户 × 每个渠道一次独立请求，使用各自的 `api_key`，这样每个用户都能在 Resend 等后台看到自己的发送记录。限速按**渠道类型**分别计算（email / telegram / wecom …各一个独立门），不同服务互不阻塞。
-- 渠道密钥不落库：页面只保存 `${ENV_VAR}` 占位符或环境变量名（邮件填 `api_key_env` 的变量名，不加 `${}`），发送时才在内存里展开；明文 token 会被拒绝，列表回显统一脱敏。Compose 已把 `.env` 里全部渠道变量透传进容器。
+- **不做跨用户合并**：每个用户 × 每个渠道一次独立请求，使用各自的凭据，这样每个用户都能在 Resend 等后台看到自己的发送记录。限速按**渠道类型**分别计算（email / telegram / wecom …各一个独立门），不同服务互不阻塞。
+- 渠道密钥**加密落库，运行期不读任何环境变量**。页面提交的是字段值本身，服务端 `Seal` 后写入 `channel_secrets`；列表与下钻接口只返回 `secret_fields`（哪些字段已配）、`secret_hints`（仅 `scheme://host`）和 `secret_state`（`ok` / `missing` / `error` / `none`），任何明文或 `fwsec:` 信封都不会出现在响应与日志里。编辑时**留空 = 保持不变**，要清除就显式传 `clear_secrets`；把密钥塞进普通字段会被 400 `secret_in_options` 拒绝。
 - 通知内容在抓取成功后就物化入库，投递失败只重试已渲染的投递组，不重新抓 feed、也不阻塞全局已见集合。
 
 ### 页面与本地开发
 
-页面：`/login`、概览、我的订阅、通知方式、账号设置；管理员另有用户管理、轮询池、限速状态、全局设置、审计日志。普通用户看不到管理端入口，后端对他人资源一律返回 404。
+页面：`/login`、概览、我的订阅、通知方式、账号设置；管理员另有用户管理（含单个用户下钻 `/admin/users/:id`，只读 + 启停）、轮询池、限速状态、全局设置、审计日志。普通用户看不到管理端入口，后端对他人资源一律返回 404。
 
 ```bash
 make build-webui                 # 或 sh web/build.sh，产物写入 internal/webui/embedded/（已 gitignore）
 go build -tags webui -o feedwatch-webui.exe ./cmd/feedwatch
-FEEDWATCH_DB_PATH=data/feedwatch.db FEEDWATCH_HTTP_ADDR=127.0.0.1:8080 ./feedwatch-webui.exe -config config.yaml
+FEEDWATCH_DB_PATH=data/feedwatch.db FEEDWATCH_HTTP_ADDR=127.0.0.1:8080 ./feedwatch-webui.exe
 ./feedwatch-webui.exe -once      # 离线冒烟：抓一轮 → 生成投递计划 → 投递一轮后退出
 ```
 
-干净 clone 下 `-tags webui` 也能编译，页面只显示占位提示（仓库只提交 `embedded/stub.html`），真实前端由 `make build-webui` 或 `Dockerfile.webui` 的 Node stage 生成。`-dry-run` 在 WebUI 变体里无意义，会被忽略并记一条日志。
+WebUI 变体**不接受 `-config`**：传了只会记一条 `-config is ignored; the WebUI variant is configured entirely in the browser` 然后继续；`-dry-run` 同样无意义。干净 clone 下 `-tags webui` 也能编译，页面只显示占位提示（仓库只提交 `embedded/stub.html`），真实前端由 `make build-webui` 或 `Dockerfile.webui` 的 Node stage 生成。
 
 前端构建需要 Node **22.12+**（Vite 8 的 `engines` 要求，`node:22-alpine` 已满足）；依赖版本见 `web/package.json`，`npm run typecheck` 可单独跑 `tsc --noEmit`。改完前端依赖后记得重新 `sh web/build.sh` 再跑 `go build -tags webui`，否则嵌进去的还是旧产物。
 
 > WebUI 仍是**单实例**：SQLite `SetMaxOpenConns(1)` + 单个后台 orchestrator，多实例写同一个库会产生写竞态与重复投递。
+
+### 从 1.0 及更早的 WebUI 升级
+
+1.1.0 起不再读 `config.yaml`，渠道密钥改为页面填写 + 加密落库。旧库能直接打开（`PRAGMA user_version` 从 1 迁到 2，只新增 `channel_secrets` 等表，不动旧数据），但**旧渠道里存的还是环境变量名 / 占位符，无法自动转成密文**，需要在「通知方式」页把凭据重填一次，否则 `secret_state` 会显示 `missing`、投递报缺少凭据。
+
+不想保留旧数据就干脆删卷重来（`docker compose -f docker-compose.webui.yml down -v`），首启会重新生成管理员密码与新密钥。**`data/` 卷与 `secret.key` 必须同进同退**，只留其一没有任何意义。
 
 ## 发布镜像（GitHub Actions / GHCR）
 
@@ -400,18 +419,18 @@ docker run -d --name feedwatch \
   ghcr.io/zsyo/feedwatch:latest
 ```
 
-WebUI 变体用 `webui` 指针 tag（或换成固定的 `1.2.3-webui`），多映射一个端口并用自己的数据卷；首次启动的管理员密码只在日志里打印一次：
+WebUI 变体用 `webui` 指针 tag（或换成固定的 `1.2.3-webui`），多映射一个端口并用自己的数据卷；**不需要 `config.yaml`，也不需要任何渠道密钥变量**，首次启动的管理员密码只在日志里打印一次：
 
 ```bash
 docker pull ghcr.io/zsyo/feedwatch:webui
 docker run -d --name feedwatch-webui \
   -p 8080:8080 \
-  -e RESEND_API_KEY="re_xxx" \
-  -v "$PWD/config.yaml:/app/config.yaml:ro" \
   -v feedwatch-webui-data:/app/data \
   ghcr.io/zsyo/feedwatch:webui
 docker logs -f feedwatch-webui
 ```
+
+> 登录后在页面里建一个普通用户来配订阅与通知方式（管理员不能配，见[身份与权限](#身份与权限)）；密钥填在页面里，加密后存库，不再经过环境变量。
 
 > 用命名卷时**不要**加 `--user`：Docker 会用镜像内 `/app/data` 的属主初始化空卷，正好是 `app` 用户；强行指定宿主机 uid 反而会写不进去。WebUI 的 SQLite 卷同理。
 
@@ -473,7 +492,8 @@ internal/pace/                有界并发 + 最小间隔的限速门（抓取�
 internal/store/               StateStore 接口 / Registry
 internal/store/jsonfile/      JSON 原子写状态 + 启动期可写性预检
 internal/watcher/             base 核心编排：有界并发抓取 → 过滤 → diff → 分批通知 → 按批次提交（webui 不改动它）
-internal/webui/               WebUI 变体（全部 //go:build webui）：首启种子、URL 规范化、embed 资源
+internal/webui/               WebUI 变体（全部 //go:build webui）：首启只建 admin、渠道字段表、URL 规范化、embed 资源
+internal/webui/secrets/       主密钥加载与 AES-256-GCM 信封加密（唯一知道密钥的包）
 internal/webui/store/         SQLite 建表/迁移/WAL/目录可写性预检（schema.sql 一次建全）
 internal/webui/auth/          bcrypt 密码、session、CSRF
 internal/webui/api/           HTTP server、中间件链、/api/* 端点与 SPA 静态服务
@@ -514,7 +534,7 @@ sh web/build.sh                 # 生成前端资源后才能看到真实页面
 
 单元测试用 `httptest` 内存网络模拟 feed 与各渠道 webhook（200/204/202/304/429/5xx/畸形 XML/厂商错误码）、临时文件测状态原子写、fake sender 测 Resend 请求（含多收件人合并成 1 次调用）、可编程 fake source 覆盖 watcher 的首轮基线 / 重启静默 / 失败重试 / 单 feed 隔离 / 304 语义 / `per_feed` 部分批次失败只重试失败项目 / 基线固定汇总 / 抓取并发上限；另有 `pace` 限速门的确定性时钟用例、飞书/钉钉 HMAC 签名向量、环境变量展开、扇出失败策略的回归用例。`go test -race` 可覆盖新的并发路径。**测试不会发出真实邮件或真实群消息**。
 
-WebUI 专项用例另覆盖：bcrypt / session / CSRF 与 cookie 属性、越权与跨用户数据隔离、渠道密钥脱敏、URL 去重只抓一次、`always` / `on_update` 分流、每用户独立投递与按渠道类型限速、投递失败重试与放弃、管理端设置校验与审计、静态资源头与未知 `/api/*` 的 JSON 404。两种构建都跑同一套 base 回归，保证 WebUI 改动不污染 base 行为。
+WebUI 专项用例另覆盖：bcrypt / session / CSRF 与 cookie 属性、越权与跨用户数据隔离、URL 去重只抓一次、`always` / `on_update` 分流、每用户独立投递与按渠道类型限速、投递失败重试与放弃、管理端设置校验与审计、静态资源头与未知 `/api/*` 的 JSON 404。密钥链路单独测：信封往返与随机 nonce、密文 / AAD 篡改、未知前缀、长度 31 / 33 拒绝、`LoadOrCreate` 建 0600 文件且**不覆盖**已存在的损坏文件、环境变量优先、坏 base64 不落盘；接口层断言创建的密钥落库为 `fwsec:v1:` 且任何响应里都没有明文、留空编辑保持不变、管理员下钻只读（多传字段即 400）、种子只建 admin 且业务表全 0。两种构建都跑同一套 base 回归，保证 WebUI 改动不污染 base 行为。
 
 改 workflow 后建议跑一次静态检查（需自行安装 `go install github.com/rhysd/actionlint/cmd/actionlint@latest`）：
 

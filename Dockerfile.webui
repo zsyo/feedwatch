@@ -35,20 +35,19 @@ RUN apk add --no-cache ca-certificates tzdata \
 ENV TZ=Asia/Shanghai
 WORKDIR /app
 COPY --from=build /out/feedwatch /app/feedwatch
-# A readable seed source for an empty database. WebUI reads it leniently (no
-# config.Validate), and afterwards the SQLite settings/subscriptions tables are
-# the only source of truth. Bind-mount your own config.yaml to change the seeds.
-COPY config.example.yaml /app/config.yaml
+# No config.yaml is shipped or read: the WebUI variant is configured entirely in
+# the browser. -config is accepted but ignored, so a stray one is harmless.
 # SQLite WAL writes -wal/-shm siblings, so the DATA DIRECTORY must be writable.
 RUN mkdir -p /app/data && chown -R app:app /app
 USER app
+# FEEDWATCH_WEBUI_SECRET_KEY is optional: when unset, /app/data/secret.key is
+# generated on first start. Leave it unset and just back up the volume.
 ENV FEEDWATCH_DB_PATH=/app/data/feedwatch.db \
     FEEDWATCH_HTTP_ADDR=:8080 \
-    FEEDWATCH_LOG_FORMAT=json \
-    FEEDWATCH_CONFIG=/app/config.yaml
+    FEEDWATCH_LOG_FORMAT=json
 EXPOSE 8080
-# The database MUST live on this volume: losing it regenerates the admin
-# password and re-imports the seeds on every container restart.
+# The database AND secret.key MUST live on this volume, and must be kept or
+# discarded TOGETHER: without the key every stored channel secret becomes
+# unreadable, and without the database the key protects nothing.
 VOLUME ["/app/data"]
 ENTRYPOINT ["/app/feedwatch"]
-CMD ["-config", "/app/config.yaml"]

@@ -32,7 +32,7 @@ import (
 )
 
 // version can be overridden with -ldflags "-X main.version=...".
-var version = "1.2.0"
+var version = "1.1.0"
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {

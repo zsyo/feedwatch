@@ -1,6 +1,13 @@
-# FeedWatch configuration reference (all supported keys).
+# FeedWatch configuration reference for the BASE build only
+# (`docker-compose.yml` / `Dockerfile` / `go build ./cmd/feedwatch`).
+#
 # The tracked template: copy to config.yaml (gitignored) or config.local.yaml
 # and adjust. Secrets never go here: the Resend key comes from the environment.
+#
+# The WEBUI build (`Dockerfile.webui` / `-tags webui`) does NOT read this file.
+# It starts with an empty database, prints a one-time admin password, and is
+# configured entirely in the browser; secrets typed there are encrypted into
+# SQLite instead of being resolved from environment variables.
 
 poll:
   interval: 30m          # Go duration: 10m / 30m / 1h / 6h
