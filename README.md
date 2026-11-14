@@ -352,14 +352,14 @@ docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里
 - **`secret.key` 与数据库必须一起备份、一起丢弃**。首启用 `O_CREATE|O_EXCL` 生成 32 字节（0600），做渠道密钥的信封加密：`fwsec:v1:` + `base64.RawURLEncoding(nonce ‖ ciphertext ‖ tag)`，AAD 绑定渠道 id，把密文复制到别的渠道行也解不开。读失败**绝不重新生成**（那会让已存凭据全部变成无法解密的垃圾），而是启动即报错并给出三条补救路径；长度或 base64 不合法同样直接拒绝。想自己托管就设 `FEEDWATCH_WEBUI_SECRET_KEY`（标准 base64 的 32 字节），它覆盖密钥文件，**设过之后不要再换**。
 - 新用户新增订阅从当前全局 seen 集合建立基线，**不会补发历史版本**；删除后重新订阅也一样。
 - 「全局设置」页可改轮询间隔、超时、并发、抓取/发送间隔、HTTP 参数等；服务端逐项校验后写库，**重启进程后生效**（不热更新）。
-- `webui.cookie_secure` / `webui.session_ttl` 是环境变量控制的只读项；`notify.mode` 在多租户模式下是每条订阅自己的 `mode`（`digest` / `per_feed`），不再是全局开关。
+- `webui.cookie_secure` / `webui.session_ttl` 是环境变量控制的只读项；`notify.mode` 在 WebUI 里不再有全局行，它是**账号级**偏好（`users.notify_mode`），在「通知方式」页顶部设置，对所有订阅与所有渠道一起生效。
 - 渠道表单由服务端下发：`GET /api/channel-fields` 返回每种渠道的字段表（键名、必填、类型、选项、是否密钥），前端按 schema 渲染。新增一种渠道只需改 `internal/webui/channelspec.go` 的 `ChannelFields`，页面不用动。
 - **显示时区跟着账号走**：默认「跟随服务器」（容器的 `TZ`，compose 默认 `Asia/Shanghai`），也可在「账号设置」里选任意 IANA 时区，存在 `users.timezone`，换设备登录自动同步。它只影响页面渲染：数据库里所有时间戳仍是 RFC3339 UTC，改时区不会重写任何数据。需要自己指定默认值就改 `.env` 的 `TZ`。
 - 页面里的时间统一渲染成 `YYYY-MM-DD HH:mm:ss`（不带 `T` / `Z`），按上面选中的时区换算；`GET /api/meta` 同时给出 `server_timezone` 与 `server_utc_offset`，未登录页面也能标出服务器默认值。WebUI 变体额外 `import _ "time/tzdata"`，因此精简镜像里没有 tzdata 也能解析 IANA 名称。
 
 ### 通知语义
 
-- 同一 URL 全局每轮只抓一次（`url_key = sha256(规范化 URL)`），抓完按每个用户各自的过滤条件、`always` / `on_update` 与 `digest` / `per_feed` 分流。
+- 同一 URL 全局每轮只抓一次（`url_key = sha256(规范化 URL)`），抓完按每个用户各自的过滤条件、`always` / `on_update` 分流。`digest` / `per_feed` 由账号决定而不是订阅：同一个用户的所有订阅共用一个形式，一轮里不会同时产出「汇总一条」和「每个项目一条」。
 - **不做跨用户合并**：每个用户 × 每个渠道一次独立请求，使用各自的凭据，这样每个用户都能在 Resend 等后台看到自己的发送记录。限速按**渠道类型**分别计算（email / telegram / wecom …各一个独立门），不同服务互不阻塞。
 - 渠道密钥**加密落库，运行期不读任何环境变量**。页面提交的是字段值本身，服务端 `Seal` 后写入 `channel_secrets`；列表与下钻接口只返回 `secret_fields`（哪些字段已配）、`secret_hints`（仅 `scheme://host`）和 `secret_state`（`ok` / `missing` / `error` / `none`），任何明文或 `fwsec:` 信封都不会出现在响应与日志里。编辑时**留空 = 保持不变**，要清除就显式传 `clear_secrets`；把密钥塞进普通字段会被 400 `secret_in_options` 拒绝。
 - 通知内容在抓取成功后就物化入库，投递失败只重试已渲染的投递组，不重新抓 feed、也不阻塞全局已见集合。

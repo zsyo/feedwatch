@@ -69,9 +69,9 @@ func tokenHash(raw string) string {
 func (m *Manager) Authenticate(username, password string) (User, error) {
 	var u User
 	var active, mustChange int
-	err := m.db.QueryRow(`SELECT id, username, password_hash, role, is_active, must_change_password, timezone
+	err := m.db.QueryRow(`SELECT id, username, password_hash, role, is_active, must_change_password, timezone, notify_mode
 		FROM users WHERE username=?`, username).Scan(
-		&u.ID, &u.Username, &u.PasswordHash, &u.Role, &active, &mustChange, &u.Timezone,
+		&u.ID, &u.Username, &u.PasswordHash, &u.Role, &active, &mustChange, &u.Timezone, &u.NotifyMode,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		VerifyPassword("", password)
@@ -131,10 +131,10 @@ func (m *Manager) LookupSession(raw string) (Session, User, error) {
 	var expires, lastSeen string
 	var active, mustChange int
 	err := m.db.QueryRow(`SELECT s.token_hash, s.user_id, s.csrf_token, s.expires_at, s.last_seen_at,
-		u.id, u.username, u.password_hash, u.role, u.is_active, u.must_change_password, u.timezone
+		u.id, u.username, u.password_hash, u.role, u.is_active, u.must_change_password, u.timezone, u.notify_mode
 		FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash=?`, hash).Scan(
 		&s.TokenHash, &s.UserID, &s.CSRFToken, &expires, &lastSeen,
-		&u.ID, &u.Username, &u.PasswordHash, &u.Role, &active, &mustChange, &u.Timezone,
+		&u.ID, &u.Username, &u.PasswordHash, &u.Role, &active, &mustChange, &u.Timezone, &u.NotifyMode,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, User{}, ErrSessionInvalid

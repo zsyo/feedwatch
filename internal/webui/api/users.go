@@ -21,11 +21,15 @@ type managedUser struct {
 	Role               string `json:"role"`
 	IsActive           bool   `json:"is_active"`
 	MustChangePassword bool   `json:"must_change_password"`
-	CreatedAt          string `json:"created_at"`
+	// NotifyMode is the account's notification shape. Surfaced read-only so an
+	// operator can explain "why did this person get three emails" without
+	// guessing; only the user can change it.
+	NotifyMode string `json:"notify_mode"`
+	CreatedAt  string `json:"created_at"`
 }
 
 func (s *Server) listUsers(w http.ResponseWriter, _ *http.Request, _ Ctx) {
-	rows, err := s.db.Query(`SELECT id, username, role, is_active, must_change_password, created_at
+	rows, err := s.db.Query(`SELECT id, username, role, is_active, must_change_password, notify_mode, created_at
 		FROM users ORDER BY id`)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "query_failed", err.Error())
@@ -36,7 +40,7 @@ func (s *Server) listUsers(w http.ResponseWriter, _ *http.Request, _ Ctx) {
 	for rows.Next() {
 		var u managedUser
 		var active, must int
-		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &active, &must, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &active, &must, &u.NotifyMode, &u.CreatedAt); err != nil {
 			fail(w, http.StatusInternalServerError, "query_failed", err.Error())
 			return
 		}

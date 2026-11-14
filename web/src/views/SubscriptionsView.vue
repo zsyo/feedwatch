@@ -11,7 +11,6 @@ interface Subscription {
   display_name: string
   source_type: string
   notify_policy: 'always' | 'on_update'
-  mode: 'digest' | 'per_feed'
   enabled: boolean
   seeded_at: string | null
 }
@@ -20,7 +19,7 @@ const items = ref<Subscription[]>([])
 const err = ref('')
 const success = ref('')
 const busy = ref(false)
-const draft = ref({ url: '', display_name: '', notify_policy: 'on_update', mode: 'digest' })
+const draft = ref({ url: '', display_name: '', notify_policy: 'on_update' })
 
 async function load(): Promise<void> {
   err.value = ''
@@ -42,9 +41,8 @@ async function create(): Promise<void> {
       url: draft.value.url.trim(),
       display_name: draft.value.display_name.trim(),
       notify_policy: draft.value.notify_policy,
-      mode: draft.value.mode,
     })
-    draft.value = { url: '', display_name: '', notify_policy: 'on_update', mode: 'digest' }
+    draft.value = { url: '', display_name: '', notify_policy: 'on_update' }
     success.value = '订阅已创建，从当前基线开始，不会补发历史版本。'
     await load()
   } catch (e) {
@@ -61,7 +59,6 @@ async function save(row: Subscription): Promise<void> {
     await api.patch(`/api/subscriptions/${row.id}`, {
       display_name: row.display_name,
       notify_policy: row.notify_policy,
-      mode: row.mode,
       enabled: row.enabled,
     })
     success.value = `订阅 #${row.id} 已保存`
@@ -86,7 +83,7 @@ async function remove(row: Subscription): Promise<void> {
 </script>
 
 <template>
-  <PageHeader title="我的订阅" description="管理要轮询的 release.atom 地址。相同 URL 全局只抓取一次，各自按策略生成通知。">
+  <PageHeader title="我的订阅" description="管理要轮询的 release.atom 地址。相同 URL 全局只抓取一次，各自按策略生成通知；通知形式（汇总一条 / 每个项目一条）是账号级设置，在「通知方式」页统一调整。">
     <button class="ghost" type="button" @click="load">刷新</button>
   </PageHeader>
   <Notice kind="error" :message="err" />
@@ -106,12 +103,6 @@ async function remove(row: Subscription): Promise<void> {
             <option value="always">每轮都发状态摘要</option>
           </select>
         </label>
-        <label>通知形式
-          <select v-model="draft.mode">
-            <option value="digest">汇总一条</option>
-            <option value="per_feed">每个项目一条</option>
-          </select>
-        </label>
       </div>
       <div class="form-actions"><button class="primary" type="submit" :disabled="busy">添加订阅</button></div>
     </form>
@@ -123,7 +114,7 @@ async function remove(row: Subscription): Promise<void> {
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>ID</th><th>项目 / URL</th><th>策略</th><th>形式</th><th>启用</th><th>操作</th></tr>
+          <tr><th>ID</th><th>项目 / URL</th><th>策略</th><th>启用</th><th>操作</th></tr>
         </thead>
         <tbody>
           <tr v-for="row in items" :key="row.id">
@@ -138,12 +129,6 @@ async function remove(row: Subscription): Promise<void> {
                 <option value="always">每轮摘要</option>
               </select>
             </td>
-            <td>
-              <select v-model="row.mode" style="min-width: 120px">
-                <option value="digest">汇总</option>
-                <option value="per_feed">逐项目</option>
-              </select>
-            </td>
             <td><label class="inline-check"><input v-model="row.enabled" type="checkbox" /></label></td>
             <td>
               <div class="cell-actions">
@@ -152,7 +137,7 @@ async function remove(row: Subscription): Promise<void> {
               </div>
             </td>
           </tr>
-          <tr v-if="!items.length"><td colspan="6" class="empty">还没有订阅，先添加一个 release.atom 地址吧。</td></tr>
+          <tr v-if="!items.length"><td colspan="5" class="empty">还没有订阅，先添加一个 release.atom 地址吧。</td></tr>
         </tbody>
       </table>
     </div>

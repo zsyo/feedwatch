@@ -164,7 +164,7 @@ function kindOf(key: string): string {
     <h2>只读参数</h2>
     <p class="card-sub">
       Cookie Secure 与会话有效期由启动时的环境变量决定（防止在纯 HTTP 上误开 Secure 导致无人可登录）；
-      notify.mode 在多租户模式下是每条订阅自己的策略。
+      notify.mode 是账号级偏好，在「通知方式」页按账号设置，这里显示的只是旧数据库遗留的默认值。
     </p>
     <div class="table-wrap">
       <table class="settings-table">

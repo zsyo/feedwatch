@@ -90,6 +90,7 @@ func publicUser(u auth.User) map[string]any {
 		"role":                 u.Role,
 		"must_change_password": u.MustChangePassword,
 		"timezone":             u.Timezone,
+		"notify_mode":          u.NotifyMode,
 	}
 }
 

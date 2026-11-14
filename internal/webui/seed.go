@@ -82,6 +82,11 @@ func Seed(st *store.Store, log *slog.Logger) (SeedResult, error) {
 // seedSettings writes the built-in defaults. config.yaml is deliberately not
 // consulted: the WebUI variant has no configuration file, and an empty database
 // must behave exactly like the documented defaults.
+//
+// notify.mode is absent on purpose: in the WebUI it is an account preference
+// (users.notify_mode) set from the notification page, so a global row would be
+// a value nothing reads. Databases seeded by earlier versions keep theirs and
+// the settings page labels it as informational.
 func seedSettings(tx *sql.Tx, now string) error {
 	cfg := config.Default()
 	// Compact durations ("30m", not "30m0s") so the stored value matches what
@@ -91,7 +96,6 @@ func seedSettings(tx *sql.Tx, now string) error {
 		"poll.timeout":          CompactDuration(cfg.Poll.Timeout.D()),
 		"poll.concurrency":      strconv.Itoa(cfg.Poll.Concurrency),
 		"poll.request_spacing":  CompactDuration(cfg.Poll.RequestSpacing.D()),
-		"notify.mode":           cfg.Notify.Mode,
 		"notify.send_spacing":   CompactDuration(cfg.Notify.SendSpacing.D()),
 		"notify.subject_prefix": cfg.Notify.SubjectPrefix,
 		"http.timeout":          CompactDuration(cfg.HTTP.Timeout.D()),

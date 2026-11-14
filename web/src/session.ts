@@ -9,7 +9,12 @@ export interface User {
   must_change_password: boolean
   /** IANA zone for display; empty means "follow the server". */
   timezone: string
+  /** How a cycle's new releases are grouped: one digest, or one per project. */
+  notify_mode: NotifyMode
 }
+
+/** digest = 汇总一条，per_feed = 每个项目一条。 */
+export type NotifyMode = 'digest' | 'per_feed'
 
 interface MeResponse {
   user: User
@@ -87,4 +92,12 @@ export async function saveTimezone(tz: string): Promise<string> {
   if (user.value) user.value = { ...user.value, timezone: res.timezone }
   setTimeZone(res.timezone)
   return res.timezone
+}
+
+// saveNotifyMode stores the account-wide notification shape. It is account
+// state, not per subscription, so one call covers every feed the user follows.
+export async function saveNotifyMode(mode: NotifyMode): Promise<NotifyMode> {
+  const res = await api.patch<{ notify_mode: NotifyMode }>('/api/me', { notify_mode: mode })
+  if (user.value) user.value = { ...user.value, notify_mode: res.notify_mode }
+  return res.notify_mode
 }

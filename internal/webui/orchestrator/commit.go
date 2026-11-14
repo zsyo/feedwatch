@@ -10,15 +10,17 @@ import (
 )
 
 type Subscription struct {
-	ID               int64
-	UserID           int64
-	URL              string
-	URLKey           string
-	DisplayName      string
-	SourceType       string
-	FilterJSON       string
-	Policy           string
-	Mode             string
+	ID          int64
+	UserID      int64
+	URL         string
+	URLKey      string
+	DisplayName string
+	SourceType  string
+	FilterJSON  string
+	Policy      string
+	// NotifyMode comes from the account, not the subscription: it decides
+	// whether this user's cycle becomes one digest or one message per project.
+	NotifyMode       string
 	PoolETag         string
 	PoolLastModified string
 	PoolLastVersion  string
@@ -33,7 +35,7 @@ type ChannelRef struct {
 
 func loadSubscriptions(db *sql.DB) ([]Subscription, error) {
 	rows, err := db.Query(`SELECT s.id, s.user_id, s.url, s.url_key, s.display_name, s.source_type,
-		s.filter_json, s.notify_policy, s.mode,
+		s.filter_json, s.notify_policy, u.notify_mode,
 		COALESCE(p.etag,''), COALESCE(p.last_modified,''), COALESCE(p.last_version,'')
 		FROM subscriptions s
 		JOIN users u ON u.id = s.user_id
@@ -48,7 +50,7 @@ func loadSubscriptions(db *sql.DB) ([]Subscription, error) {
 	for rows.Next() {
 		var s Subscription
 		if err := rows.Scan(&s.ID, &s.UserID, &s.URL, &s.URLKey, &s.DisplayName, &s.SourceType,
-			&s.FilterJSON, &s.Policy, &s.Mode, &s.PoolETag, &s.PoolLastModified, &s.PoolLastVersion); err != nil {
+			&s.FilterJSON, &s.Policy, &s.NotifyMode, &s.PoolETag, &s.PoolLastModified, &s.PoolLastVersion); err != nil {
 			return nil, fmt.Errorf("orchestrator: scan subscription: %w", err)
 		}
 		out = append(out, s)

@@ -139,8 +139,14 @@ func (o *Orchestrator) RunOnce(ctx context.Context) error {
 			a.hasNew = true
 			for _, r := range newForUser {
 				item := releaseItem(r, s.DisplayName, true)
-				if s.Mode == "per_feed" {
-					a.perFeed[s.DisplayName] = append(a.perFeed[s.DisplayName], item)
+				// NotifyMode is the account's setting, so every subscription of
+				// this user agrees: a cycle is either one digest or one message
+				// per project, never a mix of both.
+				if s.NotifyMode == "per_feed" {
+					// Keyed by the name the message will show (item.Feed already
+					// fell back to the feed title when no display name is set),
+					// so two unnamed subscriptions do not collapse into one.
+					a.perFeed[item.Feed] = append(a.perFeed[item.Feed], item)
 				} else {
 					a.digest = append(a.digest, item)
 				}

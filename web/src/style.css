@@ -93,6 +93,8 @@ textarea { min-height: 76px; resize: vertical; font-family: ui-monospace, SFMono
 .form-actions { display: flex; gap: .55rem; align-items: center; flex-wrap: wrap; margin-top: .3rem; }
 .inline-check { display: flex; align-items: center; gap: .4rem; font-size: .84rem; margin: 0; }
 .inline-check input { width: auto; margin: 0; }
+/* Two labels side by side for an account-wide either/or choice. */
+.choice-row { display: flex; flex-wrap: wrap; gap: .45rem 1.8rem; margin: .1rem 0 .2rem; }
 
 button.primary, button.ghost, button.danger, button.small {
   border-radius: 7px; padding: .5rem .9rem; font-size: .85rem; border: 1px solid transparent;

@@ -15,11 +15,13 @@ import (
 	"feedwatch/internal/webui/store"
 )
 
-// Only keys that the running process actually reads are editable. Three seeded
+// Only keys that the running process actually reads are editable. Two seeded
 // keys are deliberately excluded: webui.cookie_secure / webui.session_ttl come
 // from the environment (changing Secure over plain HTTP would lock everyone
-// out), and notify.mode is a per-subscription policy in the multi-tenant
-// orchestrator, not a global switch.
+// out). notify.mode is excluded for a different reason: in the multi-tenant
+// orchestrator it is an ACCOUNT preference stored on users, so a global row
+// would be a value nothing reads. A database seeded before v4 may still carry
+// that row; it is shown as informational with an explanation instead of a knob.
 //
 // summary says what the knob does (one short line for the table), detail
 // explains the trade-off and what it interacts with (shown on demand), and def
@@ -110,9 +112,9 @@ var readonlyDocs = map[string]settingDoc{
 		Detail:  "超过这个时长没有任何操作就需要重新登录；已登录会话每被访问一次都会顺延。修改密码会让全部会话立即失效。",
 	},
 	"notify.mode": {
-		Summary: "每条订阅自己的通知合并策略",
-		Format:  "digest（合并成一条）或 per_feed（每个订阅一条），在订阅里设置",
-		Detail:  "多租户模式下这不是全局开关：每个订阅各自选择 digest 还是 per_feed，所以它在这里只作展示。要改就去「我的订阅」里改对应订阅。",
+		Summary: "遗留的默认通知形式",
+		Format:  "digest 或 per_feed；现在按账号在「通知方式」页设置",
+		Detail:  "v4 起通知形式是账号偏好，存在用户表里，每个账号可以不同；这一行只是旧数据库留下的服务端默认值，改它不会影响任何人。要改自己的形式就去「通知方式」页顶部的「通知形式」。",
 	},
 }
 

@@ -26,6 +26,11 @@ type User struct {
 	// Timezone is an IANA zone name used only for display; empty means "server
 	// default". Nothing is stored per zone, so changing it rewrites no timestamps.
 	Timezone string
+	// NotifyMode is how this account's notifications are shaped: "digest" merges
+	// a cycle into one message, "per_feed" sends one per subscribed project. It
+	// lives on the account because a cycle can produce both shapes for the same
+	// user when subscriptions disagree.
+	NotifyMode string
 }
 
 func IsAdmin(u User) bool { return u.Role == "admin" }

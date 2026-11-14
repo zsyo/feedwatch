@@ -21,13 +21,14 @@ type subscription struct {
 	SourceType   string          `json:"source_type"`
 	Filter       json.RawMessage `json:"filter"`
 	NotifyPolicy string          `json:"notify_policy"`
-	Mode         string          `json:"mode"`
 	Enabled      bool            `json:"enabled"`
 	SeededAt     *string         `json:"seeded_at"`
 }
 
+// The notification shape (digest / per_feed) is deliberately absent: it is an
+// account preference stored on users, so it cannot differ between the rows here.
 const subscriptionColumns = `id, url, url_key, display_name, source_type, filter_json,
-	notify_policy, mode, enabled, seeded_at`
+	notify_policy, enabled, seeded_at`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -37,7 +38,7 @@ func scanSubscription(row scanner) (subscription, error) {
 	var filter string
 	var seeded sql.NullString
 	err := row.Scan(&s.ID, &s.URL, &s.URLKey, &s.DisplayName, &s.SourceType, &filter,
-		&s.NotifyPolicy, &s.Mode, &enabled, &seeded)
+		&s.NotifyPolicy, &enabled, &seeded)
 	if err != nil {
 		return subscription{}, err
 	}
@@ -76,7 +77,6 @@ func (s *Server) createSubscription(w http.ResponseWriter, r *http.Request, c Ct
 		SourceType   string         `json:"source_type"`
 		Filter       map[string]any `json:"filter"`
 		NotifyPolicy string         `json:"notify_policy"`
-		Mode         string         `json:"mode"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		fail(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -87,19 +87,12 @@ func (s *Server) createSubscription(w http.ResponseWriter, r *http.Request, c Ct
 		fail(w, http.StatusBadRequest, "invalid_url", err.Error())
 		return
 	}
-	policy, mode := req.NotifyPolicy, req.Mode
+	policy := req.NotifyPolicy
 	if policy == "" {
 		policy = "on_update"
 	}
 	if policy != "always" && policy != "on_update" {
 		fail(w, http.StatusBadRequest, "invalid_policy", "notify_policy must be always or on_update")
-		return
-	}
-	if mode == "" {
-		mode = "digest"
-	}
-	if mode != "digest" && mode != "per_feed" {
-		fail(w, http.StatusBadRequest, "invalid_mode", "mode must be digest or per_feed")
 		return
 	}
 	sourceType := req.SourceType
@@ -123,9 +116,9 @@ func (s *Server) createSubscription(w http.ResponseWriter, r *http.Request, c Ct
 	}
 	defer tx.Rollback()
 	res, err := tx.Exec(`INSERT OR IGNORE INTO subscriptions
-		(user_id, url, url_key, display_name, source_type, filter_json, notify_policy, mode, enabled, seeded_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		c.User.ID, normalized, key, req.DisplayName, sourceType, string(filterJSON), policy, mode, 1, now)
+		(user_id, url, url_key, display_name, source_type, filter_json, notify_policy, enabled, seeded_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		c.User.ID, normalized, key, req.DisplayName, sourceType, string(filterJSON), policy, 1, now)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
@@ -165,7 +158,6 @@ func (s *Server) updateSubscription(w http.ResponseWriter, r *http.Request, c Ct
 		DisplayName  *string         `json:"display_name"`
 		Filter       *map[string]any `json:"filter"`
 		NotifyPolicy *string         `json:"notify_policy"`
-		Mode         *string         `json:"mode"`
 		Enabled      *bool           `json:"enabled"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
@@ -204,13 +196,6 @@ func (s *Server) updateSubscription(w http.ResponseWriter, r *http.Request, c Ct
 			return
 		}
 		add("notify_policy", *req.NotifyPolicy)
-	}
-	if req.Mode != nil {
-		if *req.Mode != "digest" && *req.Mode != "per_feed" {
-			fail(w, http.StatusBadRequest, "invalid_mode", "mode must be digest or per_feed")
-			return
-		}
-		add("mode", *req.Mode)
 	}
 	if req.Enabled != nil {
 		add("enabled", boolToInt(*req.Enabled))

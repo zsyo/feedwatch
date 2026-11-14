@@ -23,7 +23,6 @@ type adminSubscription struct {
 	DisplayName  string `json:"display_name"`
 	SourceType   string `json:"source_type"`
 	NotifyPolicy string `json:"notify_policy"`
-	Mode         string `json:"mode"`
 	Enabled      bool   `json:"enabled"`
 }
 
@@ -43,9 +42,9 @@ type adminDelivery struct {
 func (s *Server) loadManagedUser(id int64) (managedUser, error) {
 	var u managedUser
 	var active, must int
-	err := s.db.QueryRow(`SELECT id, username, role, is_active, must_change_password, created_at
+	err := s.db.QueryRow(`SELECT id, username, role, is_active, must_change_password, notify_mode, created_at
 		FROM users WHERE id=?`, id).
-		Scan(&u.ID, &u.Username, &u.Role, &active, &must, &u.CreatedAt)
+		Scan(&u.ID, &u.Username, &u.Role, &active, &must, &u.NotifyMode, &u.CreatedAt)
 	if err != nil {
 		return managedUser{}, err
 	}
@@ -103,7 +102,7 @@ func (s *Server) adminUserSubscriptions(w http.ResponseWriter, r *http.Request, 
 	if _, ok := s.requireManagedUser(w, id); !ok {
 		return
 	}
-	rows, err := s.db.Query(`SELECT id, url, display_name, source_type, notify_policy, mode, enabled
+	rows, err := s.db.Query(`SELECT id, url, display_name, source_type, notify_policy, enabled
 		FROM subscriptions WHERE user_id=? AND deleted_at IS NULL ORDER BY id`, id)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "query_failed", err.Error())
@@ -115,7 +114,7 @@ func (s *Server) adminUserSubscriptions(w http.ResponseWriter, r *http.Request, 
 		var item adminSubscription
 		var enabled int
 		if err := rows.Scan(&item.ID, &item.URL, &item.DisplayName, &item.SourceType,
-			&item.NotifyPolicy, &item.Mode, &enabled); err != nil {
+			&item.NotifyPolicy, &enabled); err != nil {
 			fail(w, http.StatusInternalServerError, "query_failed", err.Error())
 			return
 		}

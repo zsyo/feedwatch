@@ -3,6 +3,8 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { api, errorMessage } from '../api'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
+import { saveNotifyMode, user } from '../session'
+import type { NotifyMode } from '../session'
 
 type Kind = 'text' | 'password' | 'select' | 'bool' | 'list' | 'textarea'
 
@@ -53,6 +55,13 @@ const err = ref('')
 const success = ref('')
 const busy = ref(false)
 
+// Notification shape is an account preference, not a channel field: it decides
+// how many messages one cycle turns into, regardless of where they are sent.
+const mode = ref<NotifyMode>('digest')
+const modeBusy = ref(false)
+const modeErr = ref('')
+const modeOk = ref('')
+
 const fields = computed<Field[]>(() => schema.value[form.type] ?? [])
 const plainFields = computed(() => fields.value.filter((f) => f.scope !== 'secret'))
 const inlineFields = computed(() => plainFields.value.filter((f) => f.kind !== 'textarea'))
@@ -89,9 +98,26 @@ async function loadSchema(): Promise<void> {
 }
 
 onMounted(async () => {
+  // The account is loaded before the router lets this page render, so the saved
+  // value is already available; the fallback only guards a direct reload race.
+  mode.value = user.value?.notify_mode ?? 'digest'
   await loadSchema()
   await load()
 })
+
+async function saveMode(): Promise<void> {
+  modeErr.value = ''
+  modeOk.value = ''
+  modeBusy.value = true
+  try {
+    mode.value = await saveNotifyMode(mode.value)
+    modeOk.value = '已保存，之后每一轮抓取都按这个形式生成通知。'
+  } catch (e) {
+    modeErr.value = errorMessage(e)
+  } finally {
+    modeBusy.value = false
+  }
+}
 
 function defaultsFor(type: string): Record<string, string> {
   const out: Record<string, string> = {}
@@ -240,6 +266,28 @@ function summary(ch: Channel): string[] {
   </PageHeader>
   <Notice kind="error" :message="err" />
   <Notice kind="success" :message="success" />
+
+  <div class="card">
+    <h2>通知形式</h2>
+    <p class="card-sub">
+      账号级设置，对下面所有通知方式生效，不跟随单条订阅。一轮抓取里出现多个新版本时，是合成一条发出，还是每个项目各自一条。
+    </p>
+    <div class="choice-row">
+      <label class="inline-check">
+        <input v-model="mode" type="radio" value="digest" />
+        <span>汇总一条<span class="muted">：多个项目合并在同一封里，邮件数量少</span></span>
+      </label>
+      <label class="inline-check">
+        <input v-model="mode" type="radio" value="per_feed" />
+        <span>每个项目一条<span class="muted">：便于按项目归档或转发</span></span>
+      </label>
+    </div>
+    <div class="form-actions">
+      <button class="primary" type="button" :disabled="modeBusy" @click="saveMode">保存</button>
+    </div>
+    <Notice kind="error" :message="modeErr" />
+    <Notice kind="success" :message="modeOk" />
+  </div>
 
   <div class="card">
     <h2>{{ editing === null ? '新增通知方式' : `编辑通知方式 #${editing.id}` }}</h2>

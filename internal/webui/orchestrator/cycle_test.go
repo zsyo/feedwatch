@@ -93,7 +93,7 @@ func addChannel(t *testing.T, db *sql.DB, userID int64) int64 {
 	return id
 }
 
-func addSubscription(t *testing.T, db *sql.DB, userID int64, rawURL, policy, mode, filterJSON string) string {
+func addSubscription(t *testing.T, db *sql.DB, userID int64, rawURL, policy, filterJSON string) string {
 	t.Helper()
 	normalized, key, err := webui.URLKey(rawURL)
 	if err != nil {
@@ -103,9 +103,9 @@ func addSubscription(t *testing.T, db *sql.DB, userID int64, rawURL, policy, mod
 		filterJSON = `{"stable_only":true}`
 	}
 	if _, err := db.Exec(`INSERT INTO subscriptions
-		(user_id, url, url_key, display_name, source_type, filter_json, notify_policy, mode, enabled, seeded_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`, userID, normalized, key, "project", "atom",
-		filterJSON, policy, mode, 1, fixedTime.Format(time.RFC3339Nano)); err != nil {
+		(user_id, url, url_key, display_name, source_type, filter_json, notify_policy, enabled, seeded_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`, userID, normalized, key, "project", "atom",
+		filterJSON, policy, 1, fixedTime.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT OR IGNORE INTO feed_pool (url_key, url, source_type) VALUES (?,?,?)`,
@@ -113,6 +113,15 @@ func addSubscription(t *testing.T, db *sql.DB, userID int64, rawURL, policy, mod
 		t.Fatal(err)
 	}
 	return key
+}
+
+// setNotifyMode switches a user's account-wide notification shape. It lives on
+// users, so it cannot be passed per subscription.
+func setNotifyMode(t *testing.T, db *sql.DB, userID int64, mode string) {
+	t.Helper()
+	if _, err := db.Exec(`UPDATE users SET notify_mode=? WHERE id=?`, mode, userID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func countRows(t *testing.T, db *sql.DB, query string, args ...any) int {
@@ -157,8 +166,8 @@ func TestRunOnceFetchesEachURLOnceAndCommitsGlobalSeen(t *testing.T) {
 	u1, u2 := addUser(t, db, "alice"), addUser(t, db, "bob")
 	addChannel(t, db, u1)
 	addChannel(t, db, u2)
-	key := addSubscription(t, db, u1, feedA, "on_update", "digest", "")
-	addSubscription(t, db, u2, feedAEquivalent, "on_update", "digest", "")
+	key := addSubscription(t, db, u1, feedA, "on_update", "")
+	addSubscription(t, db, u2, feedAEquivalent, "on_update", "")
 
 	if err := o.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -203,8 +212,8 @@ func TestAlwaysEmitsStatusSummaryWhileOnUpdateStaysSilent(t *testing.T) {
 	always, quiet := addUser(t, db, "always"), addUser(t, db, "quiet")
 	addChannel(t, db, always)
 	addChannel(t, db, quiet)
-	key := addSubscription(t, db, always, feedA, "always", "digest", "")
-	addSubscription(t, db, quiet, feedAEquivalent, "on_update", "digest", "")
+	key := addSubscription(t, db, always, feedA, "always", "")
+	addSubscription(t, db, quiet, feedAEquivalent, "on_update", "")
 
 	// Both users already have the whole feed in their baseline (as an API
 	// subscription would after seeding user_seen from seen_ids).
@@ -241,8 +250,8 @@ func TestPerUserFiltersAreIndependent(t *testing.T) {
 	u1, u2 := addUser(t, db, "stable-only"), addUser(t, db, "all")
 	addChannel(t, db, u1)
 	addChannel(t, db, u2)
-	addSubscription(t, db, u1, feedA, "on_update", "digest", `{"stable_only":true}`)
-	addSubscription(t, db, u2, feedAEquivalent, "on_update", "digest", `{"stable_only":false}`)
+	addSubscription(t, db, u1, feedA, "on_update", `{"stable_only":true}`)
+	addSubscription(t, db, u2, feedAEquivalent, "on_update", `{"stable_only":false}`)
 
 	if err := o.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -265,7 +274,7 @@ func TestFetchFailureDoesNotAdvanceState(t *testing.T) {
 	o, db := newHarness(t, f)
 	u := addUser(t, db, "alice")
 	addChannel(t, db, u)
-	key := addSubscription(t, db, u, feedA, "on_update", "digest", "")
+	key := addSubscription(t, db, u, feedA, "on_update", "")
 
 	if err := o.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -285,7 +294,7 @@ func TestSecondCycleDoesNotDuplicateNotifications(t *testing.T) {
 	o, db := newHarness(t, f)
 	u := addUser(t, db, "alice")
 	addChannel(t, db, u)
-	addSubscription(t, db, u, feedA, "on_update", "digest", "")
+	addSubscription(t, db, u, feedA, "on_update", "")
 
 	if err := o.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -312,7 +321,7 @@ func TestNewSubscriptionBaselineDoesNotReplayHistory(t *testing.T) {
 	old, fresh := addUser(t, db, "old"), addUser(t, db, "fresh")
 	addChannel(t, db, old)
 	addChannel(t, db, fresh)
-	key := addSubscription(t, db, old, feedA, "on_update", "digest", "")
+	key := addSubscription(t, db, old, feedA, "on_update", "")
 
 	// First cycle establishes the global baseline.
 	if err := o.RunOnce(context.Background()); err != nil {
@@ -320,7 +329,7 @@ func TestNewSubscriptionBaselineDoesNotReplayHistory(t *testing.T) {
 	}
 	// A new user subscribing to an already-known URL copies seen_ids into
 	// user_seen (this is what POST /api/subscriptions does) and must stay silent.
-	addSubscription(t, db, fresh, feedAEquivalent, "on_update", "digest", "")
+	addSubscription(t, db, fresh, feedAEquivalent, "on_update", "")
 	if _, err := db.Exec(`INSERT OR IGNORE INTO user_seen (user_id, url_key, release_id, seen_at)
 		SELECT ?, url_key, release_id, ? FROM seen_ids WHERE url_key=?`,
 		fresh, fixedTime.Format(time.RFC3339Nano), key); err != nil {
@@ -331,5 +340,61 @@ func TestNewSubscriptionBaselineDoesNotReplayHistory(t *testing.T) {
 	}
 	if got := countRows(t, db, `SELECT COUNT(*) FROM notifications`); got != 1 {
 		t.Fatalf("new subscription replayed history: %d notifications", got)
+	}
+}
+
+const feedB = "https://example.com/other/releases.atom"
+
+// The notification shape belongs to the account, not to a subscription: with the
+// same two subscriptions, digest must merge them into one message and per_feed
+// must emit one message per project. Having both shapes in a single cycle is
+// exactly what a per-subscription setting allowed before v4.
+func TestNotifyModeDecidesGroupingPerAccount(t *testing.T) {
+	cases := []struct {
+		mode      string
+		wantNotes int
+	}{
+		{"digest", 1},
+		{"per_feed", 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.mode, func(t *testing.T) {
+			f := &fakeFetcher{results: map[string]source.Result{
+				feedA: {Releases: []domain.Release{release("id-1", "1.2.3")}},
+				feedB: {Releases: []domain.Release{release("id-2", "9.9.9")}},
+			}}
+			o, db := newHarness(t, f)
+			u := addUser(t, db, "alice")
+			addChannel(t, db, u)
+			keyA := addSubscription(t, db, u, feedA, "on_update", "")
+			keyB := addSubscription(t, db, u, feedB, "on_update", "")
+			// Distinct display names: per_feed groups by the name the message
+			// shows, so two "project" labels would merge into one bucket.
+			for key, name := range map[string]string{keyA: "alpha", keyB: "beta"} {
+				if _, err := db.Exec(`UPDATE subscriptions SET display_name=? WHERE user_id=? AND url_key=?`,
+					name, u, key); err != nil {
+					t.Fatal(err)
+				}
+			}
+			setNotifyMode(t, db, u, tc.mode)
+
+			if err := o.RunOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			envs := notificationsEnvelopes(t, db)
+			if len(envs) != tc.wantNotes {
+				t.Fatalf("notifications = %d, want %d: %+v", len(envs), tc.wantNotes, envs)
+			}
+			total := 0
+			for _, env := range envs {
+				total += len(env.Note.Items)
+				if tc.mode == "per_feed" && (len(env.Note.Items) != 1 || env.Note.Scope == "") {
+					t.Fatalf("per_feed must emit one scoped message per project: %+v", env.Note)
+				}
+			}
+			if total != 2 {
+				t.Fatalf("items = %d, want 2 (one per subscription)", total)
+			}
+		})
 	}
 }

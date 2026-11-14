@@ -12,6 +12,7 @@ interface ManagedUser {
   role: 'admin' | 'user'
   is_active: boolean
   must_change_password: boolean
+  notify_mode: 'digest' | 'per_feed'
   created_at: string
 }
 
@@ -21,7 +22,6 @@ interface Subscription {
   display_name: string
   source_type: string
   notify_policy: string
-  mode: string
   enabled: boolean
 }
 
@@ -138,21 +138,23 @@ async function toggleChannel(row: Channel): Promise<void> {
 
   <div class="card">
     <h2>订阅</h2>
-    <p class="card-sub">只读，URL 中的凭据已脱敏。</p>
+    <p class="card-sub">
+      只读，URL 中的凭据已脱敏。通知形式由账号统一设置：
+      <span class="mono">{{ user?.notify_mode === 'per_feed' ? 'per_feed（每个项目一条）' : 'digest（汇总一条）' }}</span>
+    </p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>URL</th><th>名称</th><th>策略</th><th>形式</th><th>状态</th><th>操作</th></tr></thead>
+        <thead><tr><th>ID</th><th>URL</th><th>名称</th><th>策略</th><th>状态</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="row in subscriptions" :key="row.id">
             <td class="mono">{{ row.id }}</td>
             <td class="mono cell-url">{{ row.url }}</td>
             <td>{{ row.display_name || '—' }}</td>
             <td>{{ row.notify_policy }}</td>
-            <td>{{ row.mode }}</td>
             <td><span class="badge" :class="row.enabled ? 'badge-on' : 'badge-off'">{{ row.enabled ? '启用' : '停用' }}</span></td>
             <td><button class="small" type="button" @click="toggleSubscription(row)">{{ row.enabled ? '停用' : '启用' }}</button></td>
           </tr>
-          <tr v-if="!subscriptions.length"><td colspan="7" class="empty">该用户没有订阅。</td></tr>
+          <tr v-if="!subscriptions.length"><td colspan="6" class="empty">该用户没有订阅。</td></tr>
         </tbody>
       </table>
     </div>

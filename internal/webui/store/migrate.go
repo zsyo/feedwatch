@@ -16,7 +16,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 func migrate(db *sql.DB) error {
 	var version int
@@ -42,6 +42,16 @@ func migrate(db *sql.DB) error {
 	// ever creates whole tables. Each one is applied here, guarded by a lookup so
 	// that a brand-new database (where schema.sql already declared it) is a no-op.
 	if err := ensureColumn(tx, "users", "timezone", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// v4 moved the notification shape from each subscription to the account.
+	// Any value an old row had in subscriptions.mode is intentionally dropped:
+	// it was a per-subscription choice, and guessing an account-wide value from
+	// a mix of them would change behaviour for a user who had both. A database
+	// migrated from v3 keeps that column, now unused; it has a NOT NULL DEFAULT,
+	// so the narrowed INSERT in the API keeps working without a table rebuild.
+	if err := ensureColumn(tx, "users", "notify_mode",
+		"TEXT NOT NULL DEFAULT 'digest' CHECK (notify_mode IN ('digest', 'per_feed'))"); err != nil {
 		return err
 	}
 	// PRAGMA cannot be parameterized, but the value is a compile-time constant.

@@ -65,16 +65,69 @@ func TestPreferencesTimezoneRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPreferencesRequireTimezone(t *testing.T) {
+func TestPreferencesRejectEmptyPatch(t *testing.T) {
 	ts, _ := newTestServer(t)
 	c := login(t, ts, "alice", "alice-pass")
 
+	// Neither field present: there is nothing to update.
 	c.do(http.MethodPatch, "/api/me", map[string]string{}, http.StatusBadRequest)
 	c.do(http.MethodPatch, "/api/me", map[string]string{"timezone": strings.Repeat("a", 65)}, http.StatusBadRequest)
+	c.do(http.MethodPatch, "/api/me", map[string]string{"notify_mode": "both"}, http.StatusBadRequest)
 	// "Local" is the server's own zone, i.e. the same thing as "follow server".
 	out := c.do(http.MethodPatch, "/api/me", map[string]string{"timezone": "Local"}, http.StatusOK)
 	if out["timezone"] != "" {
 		t.Fatalf("Local should fold to the server default: %+v", out)
+	}
+}
+
+// The notification shape is account state as well: it decides how one cycle is
+// grouped into messages, so two subscriptions of the same user must never be
+// able to disagree about it.
+func TestPreferencesNotifyModeRoundTrip(t *testing.T) {
+	ts, db := newTestServer(t)
+	c := login(t, ts, "alice", "alice-pass")
+
+	me := c.do(http.MethodGet, "/api/auth/me", nil, http.StatusOK)
+	if user, _ := me["user"].(map[string]any); user["notify_mode"] != "digest" {
+		t.Fatalf("a new account should default to digest, got %v", user["notify_mode"])
+	}
+
+	out := c.do(http.MethodPatch, "/api/me", map[string]string{"notify_mode": "per_feed"}, http.StatusOK)
+	if out["notify_mode"] != "per_feed" {
+		t.Fatalf("PATCH /api/me = %+v", out)
+	}
+	var stored string
+	if err := db.QueryRow("SELECT notify_mode FROM users WHERE username='alice'").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "per_feed" {
+		t.Fatalf("stored notify_mode = %q", stored)
+	}
+
+	// "Another device": the value travels with the account, not the session.
+	other := login(t, ts, "alice", "alice-pass")
+	me = other.do(http.MethodGet, "/api/auth/me", nil, http.StatusOK)
+	if user, _ := me["user"].(map[string]any); user["notify_mode"] != "per_feed" {
+		t.Fatalf("new session did not see the stored mode: %+v", user)
+	}
+
+	// An unknown shape is rejected and leaves the previous value alone.
+	bad := c.do(http.MethodPatch, "/api/me", map[string]string{"notify_mode": "both"}, http.StatusBadRequest)
+	if code, _ := bad["error"].(map[string]any)["code"].(string); code != "invalid_notify_mode" {
+		t.Fatalf("error code = %q", code)
+	}
+	if err := db.QueryRow("SELECT notify_mode FROM users WHERE username='alice'").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "per_feed" {
+		t.Fatalf("rejected write still changed the row: %q", stored)
+	}
+
+	// Patching one preference must not reset the other.
+	c.do(http.MethodPatch, "/api/me", map[string]string{"timezone": "Asia/Tokyo"}, http.StatusOK)
+	out = c.do(http.MethodPatch, "/api/me", map[string]string{"notify_mode": "digest"}, http.StatusOK)
+	if out["timezone"] != "Asia/Tokyo" {
+		t.Fatalf("notify_mode patch clobbered the timezone: %+v", out)
 	}
 }
 

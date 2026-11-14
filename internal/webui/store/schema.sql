@@ -1,4 +1,4 @@
--- FeedWatch WebUI schema, version 3.
+-- FeedWatch WebUI schema, version 4.
 -- Every statement is IF NOT EXISTS, so running this on an older database only
 -- adds the tables it is missing. Adding a COLUMN to an existing table is not
 -- covered by this file: migrate.go carries those as explicit ALTER TABLE steps.
@@ -15,6 +15,12 @@ CREATE TABLE IF NOT EXISTS users (
   -- IANA zone name for display ("Asia/Shanghai"); empty means "use the
   -- server's zone". Purely cosmetic: no timestamp is ever stored per zone.
   timezone              TEXT NOT NULL DEFAULT '',
+  -- Shape of this account's notifications: "digest" merges every new release of
+  -- a cycle into one message, "per_feed" sends one message per subscribed
+  -- project. Deliberately per ACCOUNT, not per subscription: a single cycle can
+  -- produce both shapes, which is more messages than the user asked for and
+  -- impossible to predict from the subscription list.
+  notify_mode           TEXT NOT NULL DEFAULT 'digest' CHECK (notify_mode IN ('digest', 'per_feed')),
   created_at            TEXT NOT NULL,
   updated_at            TEXT NOT NULL
 );
@@ -37,7 +43,6 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   source_type    TEXT NOT NULL DEFAULT 'atom',
   filter_json    TEXT NOT NULL DEFAULT '{}',
   notify_policy  TEXT NOT NULL DEFAULT 'on_update' CHECK (notify_policy IN ('always', 'on_update')),
-  mode           TEXT NOT NULL DEFAULT 'digest' CHECK (mode IN ('digest', 'per_feed')),
   enabled        INTEGER NOT NULL DEFAULT 1,
   seeded_at      TEXT,
   deleted_at     TEXT
