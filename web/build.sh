@@ -16,6 +16,29 @@ rm -f "$OUT_DIR/index.html" "$OUT_DIR/BUILD_ID"
 
 cd "$ROOT/web"
 
+# ---- toolchain preflight ----------------------------------------------------
+# A `command -v node` check is not enough: tool-version managers (mise, asdf)
+# leave a shim on PATH even when the version it resolves to has been removed, and
+# the shim only fails once it actually runs. Catch that here instead of letting
+# it surface as "npm failed" halfway through the build.
+if ! node -e '' 2>/dev/null || ! npm --version >/dev/null 2>&1; then
+  {
+    echo "error: node/npm on PATH is not runnable, so the SPA cannot be built."
+    echo
+    echo "  With mise, 'node is not a valid shim' means the shim points at a"
+    echo "  version that is not installed. Install what your config asks for, then"
+    echo "  run the build through mise so the real binary is on PATH:"
+    echo "      mise install          # 补齐 config.toml 里声明的版本"
+    echo "      mise exec -- make build-webui"
+    echo "  Putting a node directory first on PATH works too, e.g."
+    echo "      PATH=\"/c/Program Files/nodejs:\$PATH\" make build-webui"
+    echo
+    echo "  node -> $(command -v node || echo '<not found>')"
+    echo "  npm  -> $(command -v npm || echo '<not found>')"
+  } >&2
+  exit 1
+fi
+
 # ---- dependencies -----------------------------------------------------------
 # `npm ci` deletes node_modules before reinstalling it. That costs more time than
 # the build itself, and on Windows the deleted files pile up in the Recycle Bin,
