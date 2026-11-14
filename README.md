@@ -354,6 +354,8 @@ docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里
 - 「全局设置」页可改轮询间隔、超时、并发、抓取/发送间隔、HTTP 参数等；服务端逐项校验后写库，**重启进程后生效**（不热更新）。
 - `webui.cookie_secure` / `webui.session_ttl` 是环境变量控制的只读项；`notify.mode` 在多租户模式下是每条订阅自己的 `mode`（`digest` / `per_feed`），不再是全局开关。
 - 渠道表单由服务端下发：`GET /api/channel-fields` 返回每种渠道的字段表（键名、必填、类型、选项、是否密钥），前端按 schema 渲染。新增一种渠道只需改 `internal/webui/channelspec.go` 的 `ChannelFields`，页面不用动。
+- **显示时区跟着账号走**：默认「跟随服务器」（容器的 `TZ`，compose 默认 `Asia/Shanghai`），也可在「账号设置」里选任意 IANA 时区，存在 `users.timezone`，换设备登录自动同步。它只影响页面渲染：数据库里所有时间戳仍是 RFC3339 UTC，改时区不会重写任何数据。需要自己指定默认值就改 `.env` 的 `TZ`。
+- 页面里的时间统一渲染成 `YYYY-MM-DD HH:mm:ss`（不带 `T` / `Z`），按上面选中的时区换算；`GET /api/meta` 同时给出 `server_timezone` 与 `server_utc_offset`，未登录页面也能标出服务器默认值。WebUI 变体额外 `import _ "time/tzdata"`，因此精简镜像里没有 tzdata 也能解析 IANA 名称。
 
 ### 通知语义
 
