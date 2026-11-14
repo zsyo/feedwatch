@@ -21,17 +21,16 @@ cd "$ROOT/web"
 # leave a shim on PATH even when the version it resolves to has been removed, and
 # the shim only fails once it actually runs. Catch that here instead of letting
 # it surface as "npm failed" halfway through the build.
-if ! node -e '' 2>/dev/null || ! npm --version >/dev/null 2>&1; then
+if ! node -e '' || ! npm --version >/dev/null 2>&1; then
   {
     echo "error: node/npm on PATH is not runnable, so the SPA cannot be built."
     echo
-    echo "  With mise, 'node is not a valid shim' means the shim points at a"
-    echo "  version that is not installed. Install what your config asks for, then"
-    echo "  run the build through mise so the real binary is on PATH:"
-    echo "      mise install          # 补齐 config.toml 里声明的版本"
-    echo "      mise exec -- make build-webui"
-    echo "  Putting a node directory first on PATH works too, e.g."
-    echo "      PATH=\"/c/Program Files/nodejs:\$PATH\" make build-webui"
+    echo "  A version-manager shim (mise/asdf) stays on PATH after the version it"
+    echo "  points at is gone, so it resolves but cannot execute. Install what the"
+    echo "  config asks for, or bypass the shim by putting the real directory first:"
+    echo "      mise install"
+    echo "      export PATH=\"\$(cygpath -u \"\$(mise where node)\"):\$PATH\""
+    echo "      make build-webui"
     echo
     echo "  node -> $(command -v node || echo '<not found>')"
     echo "  npm  -> $(command -v npm || echo '<not found>')"
