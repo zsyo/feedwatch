@@ -166,7 +166,12 @@ td .cell-actions { display: flex; gap: .35rem; flex-wrap: wrap; }
 }
 .setting-value { min-width: 280px; }
 .setting-value input { width: 100%; max-width: 420px; }
-.setting-meta { color: var(--muted); font-size: .74rem; line-height: 1.5; margin-top: .2rem; }
+/* Same width as the input so the two form a single vertical edge; long defaults
+   wrap instead of stretching the whole column. */
+.setting-meta {
+  color: var(--muted); font-size: .74rem; line-height: 1.5;
+  margin-top: .2rem; max-width: 420px; word-break: break-word;
+}
 .setting-time { white-space: nowrap; }
 .setting-toggle { text-align: right; width: 1%; min-width: 84px; white-space: nowrap; }
 .setting-toggle button { color: var(--accent); }

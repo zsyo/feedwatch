@@ -132,7 +132,7 @@ type settingDoc struct {
 func settingFormat(rule settingRule) string {
 	switch rule.kind {
 	case "duration":
-		return fmt.Sprintf("Go duration，如 30m / 250ms；范围 %s ~ %s",
+		return fmt.Sprintf("时长，如 30m / 250ms；范围 %s ~ %s",
 			webui.CompactDuration(time.Duration(rule.min)), webui.CompactDuration(time.Duration(rule.max)))
 	case "int":
 		return fmt.Sprintf("整数；范围 %d ~ %d", rule.min, rule.max)
