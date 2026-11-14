@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"feedwatch/internal/webui"
 	"feedwatch/internal/webui/store"
 )
 
@@ -19,50 +20,141 @@ import (
 // from the environment (changing Secure over plain HTTP would lock everyone
 // out), and notify.mode is a per-subscription policy in the multi-tenant
 // orchestrator, not a global switch.
+//
+// summary says what the knob does (one short line for the table), detail
+// explains the trade-off and what it interacts with (shown on demand), and def
+// is the built-in default, asserted against config.Default in the tests so the
+// page can never advertise a value the process would not actually use.
 type settingRule struct {
-	kind   string
-	min    int64
-	max    int64
-	maxLen int
+	kind    string
+	min     int64
+	max     int64
+	maxLen  int
+	summary string
+	def     string
+	detail  string
 }
 
 var editableSettings = map[string]settingRule{
-	"poll.interval":         {kind: "duration", min: int64(time.Second), max: int64(7 * 24 * time.Hour)},
-	"poll.timeout":          {kind: "duration", min: int64(time.Second), max: int64(time.Hour)},
-	"poll.concurrency":      {kind: "int", min: 1, max: 64},
-	"poll.request_spacing":  {kind: "duration", min: 0, max: int64(time.Minute)},
-	"notify.send_spacing":   {kind: "duration", min: 0, max: int64(time.Minute)},
-	"notify.subject_prefix": {kind: "text", maxLen: 120},
-	"http.timeout":          {kind: "duration", min: int64(time.Second), max: int64(5 * time.Minute)},
-	"http.user_agent":       {kind: "text", maxLen: 200},
-	"http.retry_max":        {kind: "int", min: 0, max: 10},
-	"http.retry_base_delay": {kind: "duration", min: 0, max: int64(time.Minute)},
-	"http.conditional":      {kind: "bool"},
+	"poll.interval": {
+		kind: "duration", min: int64(time.Second), max: int64(7 * 24 * time.Hour),
+		summary: "多久跑一轮抓取", def: "30m",
+		detail: "调度器两次抓取周期之间的间隔。每轮会把所有订阅去重后的 URL 各抓一次；调小能更快发现新版本，同时增加对上游站点的请求量。它应当明显大于「单轮超时」，否则上一轮还没结束下一轮就开始了。",
+	},
+	"poll.timeout": {
+		kind: "duration", min: int64(time.Second), max: int64(time.Hour),
+		summary: "一轮抓取的总时限", def: "2m",
+		detail: "整轮抓取（含并发与限速等待）的最长执行时间。超时后本轮没跑完的订阅会被跳过、留到下一轮，已经抓到的结果照常入库与投递。它不是单个请求的超时——那个由 http.timeout 管。",
+	},
+	"poll.concurrency": {
+		kind: "int", min: 1, max: 64,
+		summary: "同时抓取多少个 URL", def: "4",
+		detail: "一轮内并行抓取的 URL 数量。调大能缩短一轮耗时，但会同时占用更多上游连接；「抓取间隔」是全局闸门，并发调得再高也不会突破它。",
+	},
+	"poll.request_spacing": {
+		kind: "duration", min: 0, max: int64(time.Minute),
+		summary: "两次抓取之间的最小间隔", def: "100ms",
+		detail: "任意两次抓取请求发起之间的最小间隔，全局生效、不按站点分组；100ms 大致等于每秒 10 个请求。调大能降低被上游限流或封禁的概率，但如果「订阅数 × 间隔」超过「单轮超时」，一轮就会抓不完。0s 表示不额外限速。",
+	},
+	"notify.send_spacing": {
+		kind: "duration", min: 0, max: int64(time.Minute),
+		summary: "同一渠道两次发送的间隔", def: "250ms",
+		detail: "每种渠道类型各自有一个独立的闸门（email / telegram / webhook …），不同类型互不阻塞。用来避开服务商的速率限制；只影响发送节奏，不影响抓取。",
+	},
+	"notify.subject_prefix": {
+		kind: "text", maxLen: 120,
+		summary: "通知标题前面的固定文案", def: "[FeedWatch]",
+		detail: "拼在每条通知标题最前面，通常写项目名或 [FW]，方便邮件客户端过滤。留空时回落到 [FeedWatch]。只影响之后生成的通知，已生成待投递的投递组不会改变。",
+	},
+	"http.timeout": {
+		kind: "duration", min: int64(time.Second), max: int64(5 * time.Minute),
+		summary: "单个 HTTP 请求的超时", def: "15s",
+		detail: "每个出站请求独立的超时，抓 feed 和发通知都适用，与轮询总超时无关。上游站点慢时可以调大；调得过大时，一个卡死的请求会长期占住一个并发槽。",
+	},
+	"http.user_agent": {
+		kind: "text", maxLen: 200,
+		summary: "抓取请求的 User-Agent", def: "feedwatch/1.0 (+https://github.com/zsyo/feedwatch)",
+		detail: "所有抓取请求携带的 UA。部分站点（GitHub API、Cloudflare 后面的博客）会按 UA 限流或直接返回 403，写上自己的联系方式更容易被放行。",
+	},
+	"http.retry_max": {
+		kind: "int", min: 0, max: 10,
+		summary: "单个请求最多重试几次", def: "3",
+		detail: "遇到 5xx、429 与网络错误时的最大重试次数，0 表示不重试；其他 4xx 一律不重试。调大能熬过上游抖动，但会拖长一轮的耗时。",
+	},
+	"http.retry_base_delay": {
+		kind: "duration", min: 0, max: int64(time.Minute),
+		summary: "重试的起始等待时间", def: "500ms",
+		detail: "第 n 次重试前等待 base × 2ⁿ⁻¹，单次上限 30s；上游返回 Retry-After 时按它等（单次不超过 60s）。500ms 大致是 0.5s / 1s / 2s。",
+	},
+	"http.conditional": {
+		kind:    "bool",
+		summary: "用 ETag / 304 减少重复下载", def: "true",
+		detail: "开启后复用上次的 ETag 与 Last-Modified，内容没变时上游返回 304，既省流量也省时间。只有在怀疑上游对条件请求返回了错误内容时才需要关掉。",
+	},
 }
 
 var envOnlySettings = []string{"webui.cookie_secure", "webui.session_ttl"}
 var informationalSettings = []string{"notify.mode"}
 
+// readonlyDocs covers the three keys the UI must not edit (see the comment on
+// editableSettings). They still deserve a purpose line of their own.
+var readonlyDocs = map[string]settingDoc{
+	"webui.cookie_secure": {
+		Summary: "会话 Cookie 是否只在 HTTPS 下发送",
+		Format:  "由环境变量 FEEDWATCH_WEBUI_COOKIE_SECURE 决定",
+		Detail:  "必须在启动时确定：纯 HTTP 直连误开该选项会让浏览器不再回传 Cookie，结果是所有人都登录不上，所以不提供页面开关。经 HTTPS 反向代理时应设为 true。",
+	},
+	"webui.session_ttl": {
+		Summary: "登录会话的有效期",
+		Format:  "由环境变量 FEEDWATCH_WEBUI_SESSION_TTL 决定，默认 168h",
+		Detail:  "超过这个时长没有任何操作就需要重新登录；已登录会话每被访问一次都会顺延。修改密码会让全部会话立即失效。",
+	},
+	"notify.mode": {
+		Summary: "每条订阅自己的通知合并策略",
+		Format:  "digest（合并成一条）或 per_feed（每个订阅一条），在订阅里设置",
+		Detail:  "多租户模式下这不是全局开关：每个订阅各自选择 digest 还是 per_feed，所以它在这里只作展示。要改就去「我的订阅」里改对应订阅。",
+	},
+}
+
 const settingsApplyNote = "设置写入数据库后在下次进程启动时由组合根读取，当前轮询/投递周期不会热更新。"
 
-func settingHint(rule settingRule) string {
+// settingDoc is what the settings page renders: a one-line purpose next to the
+// key, the accepted format under the input, and the long explanation behind a
+// per-row toggle. Keeping the long text out of the table stops the layout from
+// wrapping when a description runs to three sentences.
+type settingDoc struct {
+	Summary string `json:"summary"`
+	Format  string `json:"format"`
+	Default string `json:"default,omitempty"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+func settingFormat(rule settingRule) string {
 	switch rule.kind {
 	case "duration":
-		return fmt.Sprintf("Go duration (例如 30m / 250ms)，范围 %s ~ %s",
-			time.Duration(rule.min).String(), time.Duration(rule.max).String())
+		return fmt.Sprintf("Go duration，如 30m / 250ms；范围 %s ~ %s",
+			webui.CompactDuration(time.Duration(rule.min)), webui.CompactDuration(time.Duration(rule.max)))
 	case "int":
-		return fmt.Sprintf("整数，范围 %d ~ %d", rule.min, rule.max)
+		return fmt.Sprintf("整数；范围 %d ~ %d", rule.min, rule.max)
 	case "bool":
 		return "true 或 false"
 	default:
-		return fmt.Sprintf("文本，最长 %d 字符，不能包含换行", rule.maxLen)
+		return fmt.Sprintf("文本，最长 %d 字符", rule.maxLen)
 	}
 }
 
-func editableHints() map[string]string {
-	out := make(map[string]string, len(editableSettings))
+func settingDocs() map[string]settingDoc {
+	out := make(map[string]settingDoc, len(editableSettings)+len(readonlyDocs))
 	for k, rule := range editableSettings {
-		out[k] = settingHint(rule)
+		out[k] = settingDoc{
+			Summary: rule.summary,
+			Format:  settingFormat(rule),
+			Default: rule.def,
+			Detail:  rule.detail,
+		}
+	}
+	for k, doc := range readonlyDocs {
+		out[k] = doc
 	}
 	return out
 }
@@ -424,7 +516,7 @@ func (s *Server) settingsResponse() map[string]any {
 	}
 	return map[string]any{
 		"settings":      rows,
-		"editable":      editableHints(),
+		"docs":          settingDocs(),
 		"env_only":      envOnlySettings,
 		"informational": informationalSettings,
 		"applies":       "restart",

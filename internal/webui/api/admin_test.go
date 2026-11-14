@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"feedwatch/internal/config"
 	"feedwatch/internal/webui/auth"
 	"feedwatch/internal/webui/store"
 )
@@ -123,12 +125,16 @@ func TestAdminSettingsValidationAndAtomicUpdate(t *testing.T) {
 	if get["applies"] != "restart" {
 		t.Fatalf("settings must state that a restart is required: %+v", get)
 	}
-	hints := get["editable"].(map[string]any)
+	hints := get["docs"].(map[string]any)
 	if _, ok := hints["poll.interval"]; !ok {
-		t.Fatalf("poll.interval must be editable: %+v", hints)
+		t.Fatalf("poll.interval must be documented: %+v", hints)
 	}
-	if _, ok := hints["webui.cookie_secure"]; ok {
+	if _, ok := editableSettings["webui.cookie_secure"]; ok {
 		t.Fatal("env-only settings must not be editable from the UI")
+	}
+	// Read-only keys still need a purpose line so the page can explain them.
+	if _, ok := hints["webui.cookie_secure"]; !ok {
+		t.Fatal("read-only settings must carry documentation too")
 	}
 	if !containsString(get["env_only"].([]any), "webui.cookie_secure") ||
 		!containsString(get["informational"].([]any), "notify.mode") {
@@ -403,6 +409,73 @@ func TestMaskErrorTextStripsCredentials(t *testing.T) {
 	for _, leak := range []string{"123:abc", "sekrit", "abcdef"} {
 		if strings.Contains(out, leak) {
 			t.Fatalf("maskErrorText leaked %q: %s", leak, out)
+		}
+	}
+}
+
+func TestSettingsDocsDescribeEveryKey(t *testing.T) {
+	docs := settingDocs()
+	for key := range editableSettings {
+		doc, ok := docs[key]
+		if !ok {
+			t.Fatalf("%s has no documentation", key)
+		}
+		if doc.Summary == "" || doc.Format == "" || doc.Default == "" || doc.Detail == "" {
+			t.Fatalf("%s documentation is incomplete: %+v", key, doc)
+		}
+		// The summary sits on one line next to the key; anything longer wraps
+		// and drags the table row height around.
+		if n := len([]rune(doc.Summary)); n > 20 {
+			t.Errorf("%s summary is %d runes, keep it under 20: %q", key, n, doc.Summary)
+		}
+		// A documented default must be a value the validator actually accepts,
+		// otherwise the page would advertise an unsavable setting.
+		if err := validateSetting(key, doc.Default); err != nil {
+			t.Errorf("%s default %q fails validation: %v", key, doc.Default, err)
+		}
+	}
+	for key := range readonlyDocs {
+		if _, ok := docs[key]; !ok {
+			t.Errorf("%s is read-only but undocumented", key)
+		}
+	}
+}
+
+// TestSettingDefaultsMatchConfig guards against the docs drifting away from the
+// values config.Default seeds: the page shows `Default` as "what the process
+// would use", so it has to be the same number.
+func TestSettingDefaultsMatchConfig(t *testing.T) {
+	c := config.Default()
+	want := map[string]string{
+		"poll.interval":         c.Poll.Interval.String(),
+		"poll.timeout":          c.Poll.Timeout.String(),
+		"poll.concurrency":      strconv.Itoa(c.Poll.Concurrency),
+		"poll.request_spacing":  c.Poll.RequestSpacing.String(),
+		"notify.send_spacing":   c.Notify.SendSpacing.String(),
+		"notify.subject_prefix": c.Notify.SubjectPrefix,
+		"http.timeout":          c.HTTP.Timeout.String(),
+		"http.user_agent":       c.HTTP.UserAgent,
+		"http.retry_max":        strconv.Itoa(c.HTTP.RetryMax),
+		"http.retry_base_delay": c.HTTP.RetryBaseDelay.String(),
+		"http.conditional":      strconv.FormatBool(c.HTTP.Conditional),
+	}
+	for key, expected := range want {
+		rule, ok := editableSettings[key]
+		if !ok {
+			t.Errorf("%s is seeded by config.Default but not editable", key)
+			continue
+		}
+		if rule.kind == "duration" {
+			// "30m" and "30m0s" are the same duration; compare parsed values.
+			got, err1 := time.ParseDuration(rule.def)
+			exp, err2 := time.ParseDuration(expected)
+			if err1 != nil || err2 != nil || got != exp {
+				t.Errorf("%s default = %q, config.Default = %q", key, rule.def, expected)
+			}
+			continue
+		}
+		if rule.def != expected {
+			t.Errorf("%s default = %q, config.Default = %q", key, rule.def, expected)
 		}
 	}
 }

@@ -103,9 +103,9 @@ func TestSeedWritesBuiltInDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	for key, want := range map[string]string{
-		"poll.interval":         defaults.Poll.Interval.String(),
+		"poll.interval":         CompactDuration(defaults.Poll.Interval.D()),
 		"notify.subject_prefix": defaults.Notify.SubjectPrefix,
-		"notify.send_spacing":   defaults.Notify.SendSpacing.String(),
+		"notify.send_spacing":   CompactDuration(defaults.Notify.SendSpacing.D()),
 		"http.user_agent":       defaults.HTTP.UserAgent,
 	} {
 		if got := settings[key]; got != want {

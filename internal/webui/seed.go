@@ -84,18 +84,20 @@ func Seed(st *store.Store, log *slog.Logger) (SeedResult, error) {
 // must behave exactly like the documented defaults.
 func seedSettings(tx *sql.Tx, now string) error {
 	cfg := config.Default()
+	// Compact durations ("30m", not "30m0s") so the stored value matches what
+	// the settings page advertises as the default.
 	settings := map[string]string{
-		"poll.interval":         cfg.Poll.Interval.String(),
-		"poll.timeout":          cfg.Poll.Timeout.String(),
+		"poll.interval":         CompactDuration(cfg.Poll.Interval.D()),
+		"poll.timeout":          CompactDuration(cfg.Poll.Timeout.D()),
 		"poll.concurrency":      strconv.Itoa(cfg.Poll.Concurrency),
-		"poll.request_spacing":  cfg.Poll.RequestSpacing.String(),
+		"poll.request_spacing":  CompactDuration(cfg.Poll.RequestSpacing.D()),
 		"notify.mode":           cfg.Notify.Mode,
-		"notify.send_spacing":   cfg.Notify.SendSpacing.String(),
+		"notify.send_spacing":   CompactDuration(cfg.Notify.SendSpacing.D()),
 		"notify.subject_prefix": cfg.Notify.SubjectPrefix,
-		"http.timeout":          cfg.HTTP.Timeout.String(),
+		"http.timeout":          CompactDuration(cfg.HTTP.Timeout.D()),
 		"http.user_agent":       cfg.HTTP.UserAgent,
 		"http.retry_max":        strconv.Itoa(cfg.HTTP.RetryMax),
-		"http.retry_base_delay": cfg.HTTP.RetryBaseDelay.String(),
+		"http.retry_base_delay": CompactDuration(cfg.HTTP.RetryBaseDelay.D()),
 		"http.conditional":      strconv.FormatBool(cfg.HTTP.Conditional),
 		"webui.cookie_secure":   "false",
 		"webui.session_ttl":     "168h",
