@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api, errorMessage } from '../api'
+import { formatTime } from '../time'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
 
@@ -96,7 +97,7 @@ const pollLabels: Array<[string, string]> = [
         <thead><tr><th>端点</th><th>当前计数</th><th>重置时间</th></tr></thead>
         <tbody>
           <tr v-for="b in data?.http_limiter?.buckets ?? []" :key="b.key">
-            <td class="mono">{{ b.key }}</td><td>{{ b.count }}</td><td class="mono">{{ b.reset_at }}</td>
+            <td class="mono">{{ b.key }}</td><td>{{ b.count }}</td><td class="mono">{{ formatTime(b.reset_at) }}</td>
           </tr>
           <tr v-if="!data?.http_limiter?.buckets?.length"><td colspan="3" class="empty">当前没有活跃限流桶</td></tr>
         </tbody>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api, errorMessage } from '../api'
+import { formatTime } from '../time'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
 
@@ -60,7 +61,7 @@ onMounted(load)
               ETag {{ row.has_etag ? '有' : '无' }} · LM {{ row.has_last_modified ? '有' : '无' }}
             </td>
             <td class="mono">{{ row.last_version || '—' }}</td>
-            <td class="mono">{{ row.last_checked || '—' }}</td>
+            <td class="mono">{{ formatTime(row.last_checked) }}</td>
           </tr>
           <tr v-if="!rows.length"><td colspan="7" class="empty">轮询池为空，添加订阅后会自动出现。</td></tr>
         </tbody>

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { api, errorMessage } from '../api'
+import { formatTime } from '../time'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
 
@@ -199,7 +200,7 @@ async function toggleChannel(row: Channel): Promise<void> {
             <td>{{ row.channel_name || '—' }}</td>
             <td><span class="badge">{{ row.status }}</span></td>
             <td>{{ row.attempts }}</td>
-            <td class="mono">{{ row.sent_at || '—' }}</td>
+            <td class="mono">{{ formatTime(row.sent_at) }}</td>
             <td class="mono cell-url">{{ row.last_error || '—' }}</td>
           </tr>
           <tr v-if="!deliveries.length"><td colspan="7" class="empty">暂无投递记录。</td></tr>

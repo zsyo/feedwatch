@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { api, errorMessage } from '../api'
+import { formatTime } from '../time'
 import { isAdmin, user } from '../session'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
@@ -132,8 +133,8 @@ onMounted(load)
         <tbody>
           <tr v-for="cycle in overview?.recent_cycles ?? []" :key="cycle.id">
             <td class="mono">{{ cycle.id }}</td>
-            <td class="mono">{{ cycle.started_at }}</td>
-            <td class="mono">{{ cycle.finished_at || '—' }}</td>
+            <td class="mono">{{ formatTime(cycle.started_at) }}</td>
+            <td class="mono">{{ formatTime(cycle.finished_at) }}</td>
             <td>{{ cycle.urls }}</td><td>{{ cycle.sent }}</td><td>{{ cycle.failed }}</td>
           </tr>
           <tr v-if="!overview?.recent_cycles?.length"><td colspan="6" class="empty">暂无轮次记录</td></tr>

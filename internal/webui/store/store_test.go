@@ -132,6 +132,55 @@ func TestOpenUpgradesVersionOneDatabase(t *testing.T) {
 	}
 }
 
+// A database created before the timezone column existed must gain it on open,
+// keep its rows, and land on the current version.
+func TestOpenAddsTimezoneColumnToOlderDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "feedwatch.db")
+	s, err := Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(
+		"INSERT INTO users (username, password_hash, role, created_at, updated_at) VALUES (?,?,?,?,?)",
+		"alice", "hash", "admin", Now(), Now(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	// Rebuild the previous release's shape: no timezone column, user_version = 2.
+	if _, err := s.DB().Exec(`ALTER TABLE users DROP COLUMN timezone`); err != nil {
+		t.Fatalf("simulate v2 schema: %v", err)
+	}
+	if _, err := s.DB().Exec(`PRAGMA user_version = 2`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("Open(v2 database): %v", err)
+	}
+	defer again.Close()
+	var version int
+	if err := again.DB().QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, schemaVersion)
+	}
+	var tz string
+	if err := again.DB().QueryRow("SELECT timezone FROM users WHERE username='alice'").Scan(&tz); err != nil {
+		t.Fatalf("timezone column was not added: %v", err)
+	}
+	if tz != "" {
+		t.Fatalf("existing row should default to the server zone, got %q", tz)
+	}
+	if _, err := again.DB().Exec("UPDATE users SET timezone='Europe/Berlin' WHERE username='alice'"); err != nil {
+		t.Fatalf("new column is not writable: %v", err)
+	}
+}
+
 func TestForeignKeysAreEnforced(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "feedwatch.db"), nil)
 	if err != nil {

@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, errorMessage } from '../api'
+import { formatTime } from '../time'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
 
@@ -135,7 +136,7 @@ async function remove(row: ManagedUser): Promise<void> {
             </td>
             <td><label class="inline-check"><input v-model="row.is_active" type="checkbox" /></label></td>
             <td><span class="badge" :class="row.must_change_password ? 'badge-admin' : 'badge-off'">{{ row.must_change_password ? '需要' : '否' }}</span></td>
-            <td class="mono">{{ row.created_at }}</td>
+            <td class="mono">{{ formatTime(row.created_at) }}</td>
             <td>
               <div class="cell-actions">
                 <button class="small" type="button" @click="router.push(`/admin/users/${row.id}`)">查看</button>

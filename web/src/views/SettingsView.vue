@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, errorMessage } from '../api'
-import { changePassword, user } from '../session'
+import { changePassword, saveTimezone, user } from '../session'
+import { previewAt, serverTimeZone, supportedZones, timeZone, zoneLabel } from '../time'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
 
@@ -14,13 +15,40 @@ const err = ref('')
 const busy = ref(false)
 const meta = ref({ version: '', build_id: '', mode: '' })
 
+// Timezone: the select drafts a value and only the save button persists it, so
+// a stray arrow-key cannot silently change what every list on the site shows.
+const tzDraft = ref('')
+const tzBusy = ref(false)
+const tzErr = ref('')
+const tzOk = ref('')
+
+const zones = computed(() => supportedZones(tzDraft.value))
+const serverLabel = computed(() => zoneLabel(serverTimeZone.value || 'Local'))
+const effectiveLabel = computed(() => zoneLabel(timeZone.value || serverTimeZone.value || 'Local'))
+const preview = computed(() => previewAt(tzDraft.value))
+
 onMounted(async () => {
+  tzDraft.value = user.value?.timezone ?? ''
   try {
     meta.value = await api.get<{ version: string; build_id: string; mode: string }>('/api/meta')
   } catch {
     // cosmetic
   }
 })
+
+async function saveTz(): Promise<void> {
+  tzErr.value = ''
+  tzOk.value = ''
+  tzBusy.value = true
+  try {
+    tzDraft.value = await saveTimezone(tzDraft.value)
+    tzOk.value = '已保存，所有页面按新时区显示。'
+  } catch (e) {
+    tzErr.value = errorMessage(e)
+  } finally {
+    tzBusy.value = false
+  }
+}
 
 async function submit(): Promise<void> {
   err.value = ''
@@ -44,7 +72,7 @@ async function submit(): Promise<void> {
 </script>
 
 <template>
-  <PageHeader title="账号设置" description="查看当前账号信息并修改密码。" />
+  <PageHeader title="账号设置" description="查看账号信息、选择页面显示时区并修改密码。" />
 
   <div class="grid-2">
     <div class="card">
@@ -55,6 +83,7 @@ async function submit(): Promise<void> {
           <tr><th>用户名</th><td>{{ user?.username }}</td></tr>
           <tr><th>角色</th><td>{{ user?.role === 'admin' ? '管理员' : '普通用户' }}</td></tr>
           <tr><th>用户 ID</th><td class="mono">{{ user?.id }}</td></tr>
+          <tr><th>显示时区</th><td class="mono">{{ effectiveLabel }}</td></tr>
           <tr><th>运行模式</th><td class="mono">{{ meta.mode || 'webui' }}</td></tr>
           <tr><th>版本 / 构建</th><td class="mono">{{ meta.version || 'dev' }} / {{ meta.build_id || 'dev' }}</td></tr>
         </tbody>
@@ -72,6 +101,28 @@ async function submit(): Promise<void> {
         <button class="primary" type="submit" :disabled="busy">{{ busy ? '提交中…' : '保存新密码' }}</button>
       </form>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>显示时区</h2>
+    <p class="card-sub">
+      只影响页面里时间的展示，数据库里仍统一存 UTC；设置跟着账号走，换设备登录也会同步。
+    </p>
+    <form @submit.prevent="saveTz">
+      <label>
+        时区
+        <select v-model="tzDraft">
+          <option value="">跟随服务器（{{ serverLabel }}）</option>
+          <option v-for="z in zones" :key="z" :value="z">{{ z }}</option>
+        </select>
+      </label>
+      <p class="card-sub">
+        按此设置显示的当前时间：<span class="mono">{{ preview }}</span>
+      </p>
+      <Notice kind="error" :message="tzErr" />
+      <Notice kind="success" :message="tzOk" />
+      <button class="primary" type="submit" :disabled="tzBusy">{{ tzBusy ? '保存中…' : '保存时区' }}</button>
+    </form>
   </div>
 
   <div class="card">

@@ -1,7 +1,7 @@
--- FeedWatch WebUI schema, version 2.
+-- FeedWatch WebUI schema, version 3.
 -- Every statement is IF NOT EXISTS, so running this on an older database only
 -- adds the tables it is missing. Adding a COLUMN to an existing table is not
--- covered by this file: that needs a real incremental migration step.
+-- covered by this file: migrate.go carries those as explicit ALTER TABLE steps.
 -- Executed inside migrate.go's transaction.
 -- Timestamp columns are RFC3339 UTC strings so they sort lexicographically.
 
@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS users (
   role                  TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
   is_active             INTEGER NOT NULL DEFAULT 1,
   must_change_password  INTEGER NOT NULL DEFAULT 0,
+  -- IANA zone name for display ("Asia/Shanghai"); empty means "use the
+  -- server's zone". Purely cosmetic: no timestamp is ever stored per zone.
+  timezone              TEXT NOT NULL DEFAULT '',
   created_at            TEXT NOT NULL,
   updated_at            TEXT NOT NULL
 );

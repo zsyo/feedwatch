@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api, errorMessage } from '../api'
+import { formatTime } from '../time'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
 
@@ -95,7 +96,7 @@ function kindOf(key: string): string {
             <td class="mono">{{ row.key }}</td>
             <td style="min-width: 200px"><input v-model="draft[row.key]" /></td>
             <td class="muted">{{ data?.editable[row.key] }}</td>
-            <td class="mono">{{ row.updated_at }}</td>
+            <td class="mono">{{ formatTime(row.updated_at) }}</td>
           </tr>
           <tr v-if="!data?.settings.some((r) => r.editable)"><td colspan="4" class="empty">加载中…</td></tr>
         </tbody>

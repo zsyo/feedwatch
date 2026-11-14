@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api, errorMessage } from '../api'
+import { formatTime } from '../time'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
 
@@ -75,7 +76,7 @@ async function page(delta: number): Promise<void> {
         <tbody>
           <tr v-for="row in data?.events ?? []" :key="row.id">
             <td class="mono">{{ row.id }}</td>
-            <td class="mono">{{ row.ts }}</td>
+            <td class="mono">{{ formatTime(row.ts) }}</td>
             <td>{{ row.actor_username || (row.actor_id ? `id:${row.actor_id}` : '匿名') }}</td>
             <td class="mono">{{ row.action }}</td>
             <td class="mono">{{ row.target }}</td>

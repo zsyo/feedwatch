@@ -23,6 +23,9 @@ type User struct {
 	Role               string
 	IsActive           bool
 	MustChangePassword bool
+	// Timezone is an IANA zone name used only for display; empty means "server
+	// default". Nothing is stored per zone, so changing it rewrites no timestamps.
+	Timezone string
 }
 
 func IsAdmin(u User) bool { return u.Role == "admin" }

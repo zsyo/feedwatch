@@ -1,11 +1,14 @@
 import { computed, ref } from 'vue'
 import { api, setCsrfToken } from './api'
+import { setTimeZone } from './time'
 
 export interface User {
   id: number
   username: string
   role: 'admin' | 'user'
   must_change_password: boolean
+  /** IANA zone for display; empty means "follow the server". */
+  timezone: string
 }
 
 interface MeResponse {
@@ -23,12 +26,15 @@ function apply(me: MeResponse): void {
   user.value = me.user
   mustChangePassword.value = me.must_change_password
   setCsrfToken(me.csrf_token)
+  // The display zone travels with the account, so a new device picks it up here.
+  setTimeZone(me.user.timezone)
 }
 
 function clear(): void {
   user.value = null
   mustChangePassword.value = false
   setCsrfToken('')
+  setTimeZone('')
 }
 
 // expireSession is called by the API layer when a request comes back 401: the
@@ -72,4 +78,13 @@ export async function changePassword(oldPassword: string, newPassword: string): 
     new_password: newPassword,
   })
   clear()
+}
+
+// saveTimezone persists the display zone on the account and applies it to the
+// current page immediately. Passing "" restores "follow the server".
+export async function saveTimezone(tz: string): Promise<string> {
+  const res = await api.patch<{ timezone: string }>('/api/me', { timezone: tz })
+  if (user.value) user.value = { ...user.value, timezone: res.timezone }
+  setTimeZone(res.timezone)
+  return res.timezone
 }

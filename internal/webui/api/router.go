@@ -21,6 +21,9 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("GET /api/auth/me", s.handle(accessAny, false, s.me))
 	mux.Handle("POST /api/auth/logout", s.handle(accessAny, false, s.logout))
 	mux.Handle("POST /api/auth/password", s.handle(accessAny, false, s.changePassword))
+	// Display preferences (currently only the timezone) belong to the account,
+	// so both roles may change their own.
+	mux.Handle("PATCH /api/me", s.handle(accessAny, false, s.updatePreferences))
 	mux.Handle("GET /api/channel-fields", s.handle(accessAny, false, s.channelFields))
 
 	// Regular users only
