@@ -407,6 +407,46 @@ tag 必须是 `vMAJOR.MINOR.PATCH`（允许 `-rc.1` 一类后缀）；格式不�
 
 CI 用 `matrix.variant` 切换 `file:`（`Dockerfile` / `Dockerfile.webui`）。webui 组的 `-webui` 后缀直接写在每个 semver pattern 里（`{{version}}-webui`），移动指针由 `type=raw,value=webui` 单独给出：metadata-action 的 `flavor.suffix` 会作用到**所有**生成的 tag，用它加后缀会把指针写成 `webui-webui`；同时 webui 组设 `latest=false`，避免它和 base 组抢同一个 `latest` tag。两组 layer cache 按 variant 隔离，互不挤占。tag 通过 `-ldflags "-X main.version=..."` 注入二进制，容器内 `./feedwatch -version` 能直接看到版本。**无需配置任何额外 secret**：用内置 `GITHUB_TOKEN` + `packages: write` 登录 GHCR，构建缓存走 GitHub Actions cache。
 
+### 先发预发布（rc），验证通过再转正式版
+
+破坏性改动、或改动了镜像内文件（Dockerfile / 配置模板 / 前端产物）时，建议先发一个 rc，让指针保持在上一个稳定版，验证没问题再转正。
+
+**① 打 rc**（在待发布的提交上）：
+
+```bash
+git tag -a v1.2.3-rc.1 -m "release v1.2.3-rc.1"
+git push origin v1.2.3-rc.1
+```
+
+只新增 `1.2.3-rc.1` 与 `1.2.3-rc.1-webui` 两个 tag，**`latest` 与 `webui` 都不动**——此时别人 `pull` 指针拿到的仍是上一个正式版，不会被半成品波及。
+
+**② 用固定 tag 验证**（不要用指针，避免验证期间指针被别的发布会话改动）：
+
+```bash
+docker pull ghcr.io/zsyo/feedwatch:1.2.3-rc.1-webui
+docker run -d --name fw-rc -p 18080:8080 ghcr.io/zsyo/feedwatch:1.2.3-rc.1-webui
+docker logs fw-rc     # 空库首启：master key、admin 密码、listening
+# 验完清理（容器里没有卷，删掉即不留痕迹）
+docker rm -f fw-rc
+```
+
+检查项：首启能拿到一次性管理员密码并完成首登改密 → 建普通用户 → 在页面上建渠道（含密钥）→ 触发一轮抓取与投递 → 投递记录与 `secret_state` 符合预期。base 变体则用 `-once -dry-run` 跑一遍配置解析与渲染。**升过级的旧数据要单独验**：拿一份旧卷副本挂上去，确认能启动、渠道凭据按文档重填后能发出去。
+
+**③ 发现问题就发下一个 rc**：改代码 → 新提交 → `v1.2.3-rc.2`。**不要重推同名 rc tag**：GHCR 上的同名 tag 会被覆盖，已经拉过 `rc.1` 的人将无法复现当时的镜像。
+
+**④ 通过后打正式 tag**，指针才会前移：
+
+```bash
+git tag -a v1.2.3 -m "release v1.2.3"
+git push origin v1.2.3
+```
+
+产出 `1.2.3` / `1.2` / `latest` 与 `1.2.3-webui` / `1.2-webui` / `webui`。
+
+> 正式 tag 必须打**实际验证过的那个提交**（或在其之上重新验证新的 HEAD）。rc 之后又在 `main` 上提了代码却直接把正式 tag 打在 HEAD 上，等于发布了没测过的内容。
+>
+> rc 的 tag 与镜像会一直留在 GHCR 作为历史，不必删除；但要清楚 `docker pull …:1.2.3-rc.1` 拿到的是预发布版本，不要把它当成正式版的等价物写进部署文档。
+
 ### 直接使用预构建镜像（服务器无需源码、无需本地编译）
 
 ```bash
