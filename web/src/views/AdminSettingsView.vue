@@ -167,7 +167,7 @@ function kindOf(key: string): string {
       notify.mode 在多租户模式下是每条订阅自己的策略。
     </p>
     <div class="table-wrap">
-      <table>
+      <table class="settings-table">
         <thead><tr><th>参数</th><th>值</th><th>原因</th><th></th></tr></thead>
         <tbody>
           <template v-for="row in readonlyRows" :key="row.key">

@@ -158,26 +158,38 @@ td .cell-actions { display: flex; gap: .35rem; flex-wrap: wrap; }
 .cell-url { max-width: 320px; word-break: break-all; }
 
 /* ---------- settings table: purpose line + on-demand detail ---------- */
-.settings-table td { vertical-align: top; }
+/* The value column is the tallest cell (input + format hint), so aligning every
+   cell to the top left the key, timestamp and button stranded in the upper half
+   of each row. Centre them instead; the expanded detail row keeps top alignment
+   because it is a paragraph block, not a label/value pair. */
+.settings-table td { vertical-align: middle; }
 .setting-name { min-width: 200px; }
 .setting-purpose {
   color: var(--muted); font-size: .78rem; line-height: 1.45; margin-top: .15rem;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;
 }
-.setting-value { min-width: 280px; }
-.setting-value input { width: 100%; max-width: 420px; }
-/* Same width as the input so the two form a single vertical edge; long defaults
-   wrap instead of stretching the whole column. */
+.setting-value { width: 540px; min-width: 300px; }
+.setting-value input { width: 100%; }
+/* The hint sits directly under the input and shares its width, so the two form a
+   single vertical edge. The column is wide enough for the longest default
+   (http.user_agent, ~500px) to stay on one line: a wrapped hint makes a single
+   row 19px taller than its neighbours, which is what made the table look ragged.
+   Any spare width goes to the parameter column instead of stretching the input. */
 .setting-meta {
   color: var(--muted); font-size: .74rem; line-height: 1.5;
-  margin-top: .2rem; max-width: 420px; word-break: break-word;
+  margin-top: .2rem; word-break: break-word;
 }
-.setting-time { white-space: nowrap; }
+/* The default value is inside the hint, so it inherits the hint's size; .mono's
+   .79rem made it larger than the sentence around it and pushed long defaults
+   onto a second line. */
+.setting-meta .mono { font-size: inherit; }
+.setting-time { white-space: nowrap; width: 1%; }
 .setting-toggle { text-align: right; width: 1%; min-width: 84px; white-space: nowrap; }
 .setting-toggle button { color: var(--accent); }
 tr.setting-detail > td {
   background: #f8fafc; border-bottom: 1px solid var(--border);
   padding: .75rem .9rem 1rem; font-size: .82rem; line-height: 1.75; color: #475467;
+  vertical-align: top;
 }
 tr.setting-detail p { margin: 0; max-width: 72ch; }
 .setting-detail-format {
