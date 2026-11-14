@@ -4,7 +4,8 @@
 FROM --platform=$BUILDPLATFORM node:22-alpine AS assets
 WORKDIR /src
 COPY web/ /src/web/
-# .dockerignore keeps web/node_modules out of the context; npm ci recreates it.
+# .dockerignore keeps web/node_modules out of the context, so build.sh finds no
+# existing tree here and does a clean `npm ci`.
 # OUT_DIR is absolute so build.sh does not touch the versioned embedded/ files.
 RUN mkdir -p /web/out && OUT_DIR=/web/out sh /src/web/build.sh
 

@@ -379,6 +379,10 @@ WebUI 变体**不接受 `-config`**：传了只会记一条 `-config is ignored;
 
 前端构建需要 Node **22.12+**（Vite 8 的 `engines` 要求，`node:22-alpine` 已满足）；依赖版本见 `web/package.json`，`npm run typecheck` 可单独跑 `tsc --noEmit`。改完前端依赖后记得重新 `sh web/build.sh` 再跑 `go build -tags webui`，否则嵌进去的还是旧产物。
 
+`sh web/build.sh` **不再每次重建 `node_modules`**：它把 `package.json` / `package-lock.json` 的内容和 Node 平台（`platform-arch-abi`）一起做指纹存进 `web/node_modules/.cache/feedwatch-deps`，指纹没变就直接跳过安装；变了才 `npm install` 增量补齐（同一目录在 Windows 与 WSL 之间切换时平台指纹不同，会各自补齐对应平台的二进制包）。只有目录不存在或显式 `FW_FORCE_DEPS=1` 时才走 `npm ci` 全量重装，`FW_SKIP_DEPS=1` 则完全不碰依赖。
+
+产物里的 `BUILD_ID`（`/api/meta` 的 `build_id`，侧边栏与概览页都显示）形如 `11142242-2f04086`：构建机本地时间的月日时分 + git 短哈希，不含秒，便于一眼比对两次构建（镜像构建跑在 UTC 下，所以 Docker 产物的时间戳是 UTC）。
+
 > WebUI 仍是**单实例**：SQLite `SetMaxOpenConns(1)` + 单个后台 orchestrator，多实例写同一个库会产生写竞态与重复投递。
 
 ### 从 1.0 及更早的 WebUI 升级
