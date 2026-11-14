@@ -8,13 +8,15 @@ import (
 	"fmt"
 )
 
-// schemaSQL holds the whole version-1 schema. Later feature points add query
-// helpers only; a schema change would bump schemaVersion and add a migration.
+// schemaSQL holds the latest schema. Every statement is IF NOT EXISTS, so a
+// database created by an older release simply gains the tables it lacks. This
+// only works for NEW TABLES: adding a column to an existing table needs a real
+// incremental step here (ALTER TABLE) plus its own version bump.
 //
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 func migrate(db *sql.DB) error {
 	var version int

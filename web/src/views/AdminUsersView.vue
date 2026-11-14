@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { api, errorMessage } from '../api'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
@@ -14,6 +15,7 @@ interface ManagedUser {
 }
 
 const users = ref<ManagedUser[]>([])
+const router = useRouter()
 const err = ref('')
 const success = ref('')
 const resetNote = ref('')
@@ -90,7 +92,7 @@ async function remove(row: ManagedUser): Promise<void> {
 </script>
 
 <template>
-  <PageHeader title="用户管理" description="创建账号、调整角色与启用状态、重置密码。服务端禁止降级/停用/删除自己或最后一个管理员。">
+  <PageHeader title="用户管理" description="创建账号、调整角色与启用状态、重置密码。管理员不能以自己的身份订阅或配置通知——为实际订阅者创建普通用户即可。">
     <button class="ghost" type="button" @click="load">刷新</button>
   </PageHeader>
   <Notice kind="error" :message="err" />
@@ -136,6 +138,7 @@ async function remove(row: ManagedUser): Promise<void> {
             <td class="mono">{{ row.created_at }}</td>
             <td>
               <div class="cell-actions">
+                <button class="small" type="button" @click="router.push(`/admin/users/${row.id}`)">查看</button>
                 <button class="small" type="button" @click="save(row)">保存</button>
                 <button class="small" type="button" @click="reset(row)">重置密码</button>
                 <button class="small" type="button" @click="remove(row)">删除</button>

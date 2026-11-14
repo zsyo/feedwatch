@@ -77,10 +77,10 @@ async function submit(): Promise<void> {
   <div class="card">
     <h2>安全说明</h2>
     <ul class="muted" style="font-size: .86rem; line-height: 1.8; padding-left: 1.2rem; margin: 0">
-      <li>通知渠道的密钥不会写入数据库，只能以 <code class="mono">${ENV_VAR}</code> 占位符或环境变量名保存，发送时在内存中展开。</li>
-      <li>每个用户的通知使用自己的密钥独立请求，不做跨用户合并；每种渠道类型各自限速。</li>
-      <li>Cookie 的 Secure 开关与会话有效期由服务端环境变量 <code class="mono">FEEDWATCH_WEBUI_COOKIE_SECURE</code>、<code class="mono">FEEDWATCH_WEBUI_SESSION_TTL</code> 控制，避免误操作锁死登录。</li>
-      <li>其它全局参数在「全局设置」页修改，重启进程后生效。</li>
+      <li>通知方式里的凭据用主密钥 AES-256-GCM 加密后保存在本机数据库，页面只显示「已配置 / 未设置」，任何页面都不会回显明文。</li>
+      <li>每个用户使用自己的凭据独立发送，不做跨用户合并；每种渠道类型各自限速。</li>
+      <li>管理员可以停用某个用户的通知，但看不到也改不了它的凭据。</li>
+      <li>站点级参数由管理员在后台维护，修改后重启进程生效。</li>
     </ul>
   </div>
 </template>

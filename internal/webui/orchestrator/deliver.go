@@ -8,13 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"feedwatch/internal/config"
 	"feedwatch/internal/domain"
 	"feedwatch/internal/notifier"
 	emailnotify "feedwatch/internal/notifier/email"
@@ -22,6 +20,7 @@ import (
 	webhooknotify "feedwatch/internal/notifier/webhook"
 	"feedwatch/internal/pace"
 	"feedwatch/internal/webui"
+	"feedwatch/internal/webui/secrets"
 	"feedwatch/internal/webui/store"
 )
 
@@ -36,6 +35,7 @@ const (
 type DeliveryWorker struct {
 	db          *sql.DB
 	reg         *notifier.Registry
+	sealer      *secrets.Sealer
 	spacing     time.Duration
 	gates       map[string]*pace.Gate
 	mu          sync.Mutex
@@ -44,7 +44,7 @@ type DeliveryWorker struct {
 	maxAttempts int
 }
 
-func NewDeliveryWorker(st *store.Store, log *slog.Logger, spacing time.Duration) *DeliveryWorker {
+func NewDeliveryWorker(st *store.Store, log *slog.Logger, spacing time.Duration, sealer *secrets.Sealer) *DeliveryWorker {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -55,7 +55,7 @@ func NewDeliveryWorker(st *store.Store, log *slog.Logger, spacing time.Duration)
 		reg.Register(typ, webhooknotify.Factory(a))
 	}
 	return &DeliveryWorker{
-		db: st.DB(), reg: reg, spacing: spacing,
+		db: st.DB(), reg: reg, sealer: sealer, spacing: spacing,
 		gates: make(map[string]*pace.Gate), log: log,
 		now: time.Now, maxAttempts: maxDeliveryAttempts,
 	}
@@ -233,34 +233,73 @@ func (w *DeliveryWorker) loadNote(cycleID, kind string) (domain.Notification, er
 	return note, nil
 }
 
-// specFor expands one channel's config in memory. Only ${ENV_VAR} references
-// and env-var NAMES are stored in SQLite, never plaintext credentials.
+// specFor rebuilds one channel's notifier spec in memory, merging the sealed
+// credentials back into the options the adapters expect. The WebUI never reads
+// environment variables here: a user-supplied variable name must not be able to
+// pull the operator's own secrets into somebody else's delivery.
 func (w *DeliveryWorker) specFor(channelID int64) (notifier.NotifierSpec, error) {
-	var typ, raw string
-	if err := w.db.QueryRow(`SELECT type, config_json FROM channels WHERE id=?`, channelID).Scan(&typ, &raw); err != nil {
+	var typ, raw, sealed string
+	if err := w.db.QueryRow(`SELECT c.type, c.config_json, COALESCE(s.ciphertext, '')
+		FROM channels c LEFT JOIN channel_secrets s ON s.channel_id = c.id
+		WHERE c.id=?`, channelID).
+		Scan(&typ, &raw, &sealed); err != nil {
 		return notifier.NotifierSpec{}, fmt.Errorf("orchestrator: load channel %d: %w", channelID, err)
 	}
 	var cs webui.ChannelSpec
 	if err := json.Unmarshal([]byte(raw), &cs); err != nil {
 		return notifier.NotifierSpec{}, fmt.Errorf("orchestrator: decode channel %d: %w", channelID, err)
 	}
-	opts, missing := config.ExpandEnvRefs(cs.Options)
-	if len(missing) > 0 {
-		return notifier.NotifierSpec{}, fmt.Errorf("orchestrator: channel %d unset environment variables: %s",
-			channelID, strings.Join(missing, ", "))
+	opts := make(map[string]string, len(cs.Options)+4)
+	for k, v := range cs.Options {
+		opts[k] = v
 	}
-	keyEnv := cs.APIKeyEnv
-	if keyEnv == "" {
-		keyEnv = config.DefaultAPIKeyEnv
+	var apiKey string
+	if strings.TrimSpace(sealed) != "" {
+		values, err := w.sealer.OpenMap(sealed, secrets.ChannelAAD(channelID))
+		if err != nil {
+			return notifier.NotifierSpec{}, fmt.Errorf("orchestrator: decrypt channel %d credentials: %w", channelID, err)
+		}
+		for k, v := range values {
+			switch k {
+			case "api_key":
+				apiKey = v
+			case "headers_json":
+				if err := mergeHeaders(opts, v); err != nil {
+					return notifier.NotifierSpec{}, fmt.Errorf("orchestrator: channel %d headers: %w", channelID, err)
+				}
+			default:
+				opts[k] = v
+			}
+		}
 	}
 	if typ == "" {
 		typ = cs.Type
 	}
 	return notifier.NotifierSpec{
 		Type: typ, Name: cs.Name, From: cs.From, To: cs.To, Cc: cs.Cc,
-		APIKey: os.Getenv(keyEnv), Options: opts,
+		APIKey: apiKey, Options: opts,
 		SubjectPrefix: cs.SubjectPrefix,
 	}, nil
+}
+
+// mergeHeaders expands the generic webhook's stored header map into the
+// "header.<Name>" option keys the adapter reads.
+func mergeHeaders(opts map[string]string, raw string) error {
+	headers := map[string]string{}
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	if err := json.Unmarshal([]byte(raw), &headers); err != nil {
+		return fmt.Errorf("headers_json is not an object of strings")
+	}
+	for name, value := range headers {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		opts["header."+name] = value
+	}
+	return nil
 }
 
 func (w *DeliveryWorker) markSent(g deliveryGroup) error {

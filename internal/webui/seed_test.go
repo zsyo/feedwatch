@@ -3,36 +3,13 @@
 package webui
 
 import (
-	"encoding/json"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"feedwatch/internal/config"
 	"feedwatch/internal/webui/store"
 	"golang.org/x/crypto/bcrypt"
 )
-
-func testSeedConfig() config.Config {
-	cfg := config.Default()
-	cfg.Feeds = []config.FeedConfig{
-		{Name: "golang/go", Type: "atom", URL: "https://github.com/golang/go/releases.atom", Enabled: true},
-		{Name: "rust-lang/rust", Type: "atom", URL: "https://github.com/rust-lang/rust/releases.atom", Enabled: true},
-		{Name: "disabled", Type: "atom", URL: "https://example.invalid/feed.atom", Enabled: false},
-	}
-	cfg.Notify.Channels = []config.ChannelConfig{
-		{
-			Type: "email", Enabled: true,
-			Email: config.EmailConfig{From: "FeedWatch <noreply@example.com>", To: []string{"me@example.com"}, APIKeyEnv: "RESEND_API_KEY"},
-		},
-		{
-			Type: "telegram", Enabled: true,
-			Options: map[string]string{"url": "https://api.telegram.org/bot${TG_TOKEN}/sendMessage", "token": "plaintext-secret"},
-		},
-	}
-	return cfg
-}
 
 func openTestStore(t *testing.T) *store.Store {
 	t.Helper()
@@ -44,43 +21,14 @@ func openTestStore(t *testing.T) *store.Store {
 	return s
 }
 
-func TestLoadSeedConfigMissingFileUsesDefaults(t *testing.T) {
-	cfg, err := LoadSeedConfig(filepath.Join(t.TempDir(), "missing.yaml"))
-	if err != nil {
-		t.Fatalf("a missing seed config must not be fatal: %v", err)
-	}
-	if cfg.Poll.Interval.D() != config.Default().Poll.Interval.D() {
-		t.Fatal("defaults were not applied")
-	}
-}
-
-func TestLoadSeedConfigSkipsValidate(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("feeds: []\nnotify:\n  channels: []\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := LoadSeedConfig(path)
-	if err != nil {
-		t.Fatalf("WebUI must not run config.Validate on the DB-backed path: %v", err)
-	}
-	if len(cfg.Feeds) != 0 || len(cfg.Notify.Channels) != 0 {
-		t.Fatalf("unexpected seeds: %+v", cfg)
-	}
-}
-
-func TestSeedCreatesAdminAndImportsOnce(t *testing.T) {
+func TestSeedCreatesOnlyTheAdministrator(t *testing.T) {
 	s := openTestStore(t)
-	cfg := testSeedConfig()
-
-	first, err := Seed(s, cfg, nil)
+	first, err := Seed(s, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !first.Created || first.Username != "admin" || first.Password == "" {
 		t.Fatalf("admin was not generated: %+v", first)
-	}
-	if first.Feeds != 2 || first.Channels != 2 {
-		t.Fatalf("seed counts = %d feeds / %d channels, want 2/2", first.Feeds, first.Channels)
 	}
 
 	var hash string
@@ -97,17 +45,21 @@ func TestSeedCreatesAdminAndImportsOnce(t *testing.T) {
 	if mustChange != 1 {
 		t.Fatal("first login must force a password change")
 	}
+
+	// A fresh WebUI database must be empty apart from the admin and the
+	// built-in global settings: no feeds, no channels, no baseline notification.
 	for _, tc := range []struct {
 		query string
 		want  int
 	}{
 		{"SELECT COUNT(*) FROM users", 1},
-		{"SELECT COUNT(*) FROM subscriptions", 2},
-		{"SELECT COUNT(*) FROM channels", 2},
-		{"SELECT COUNT(*) FROM feed_pool", 2},
-		{"SELECT COUNT(*) FROM notifications WHERE kind='baseline'", 1},
-		{"SELECT COUNT(*) FROM delivery_groups WHERE status='pending'", 2},
-		{"SELECT COUNT(*) FROM deliveries WHERE kind='baseline'", 2},
+		{"SELECT COUNT(*) FROM subscriptions", 0},
+		{"SELECT COUNT(*) FROM channels", 0},
+		{"SELECT COUNT(*) FROM channel_secrets", 0},
+		{"SELECT COUNT(*) FROM feed_pool", 0},
+		{"SELECT COUNT(*) FROM notifications", 0},
+		{"SELECT COUNT(*) FROM delivery_groups", 0},
+		{"SELECT COUNT(*) FROM deliveries", 0},
 	} {
 		var got int
 		if err := s.DB().QueryRow(tc.query).Scan(&got); err != nil {
@@ -118,27 +70,8 @@ func TestSeedCreatesAdminAndImportsOnce(t *testing.T) {
 		}
 	}
 
-	var markdown string
-	if err := s.DB().QueryRow(`SELECT markdown FROM notifications WHERE kind='baseline'`).Scan(&markdown); err != nil {
-		t.Fatal(err)
-	}
-	var envelope struct {
-		UserID     int64   `json:"user_id"`
-		ChannelIDs []int64 `json:"channel_ids"`
-		Note       struct {
-			Kind string `json:"Kind"`
-		} `json:"note"`
-	}
-	if err := json.Unmarshal([]byte(markdown), &envelope); err != nil {
-		t.Fatalf("baseline must carry a delivery envelope: %v (%q)", err, markdown)
-	}
-	if envelope.Note.Kind != "baseline" || len(envelope.ChannelIDs) != 2 {
-		t.Fatalf("unexpected baseline envelope: %+v", envelope)
-	}
-
-	// A second start must not regenerate the password or duplicate any seed.
-	cfg.Feeds = append(cfg.Feeds, config.FeedConfig{Name: "new", Type: "atom", URL: "https://example.com/a.atom", Enabled: true})
-	second, err := Seed(s, cfg, nil)
+	// Second start must be a no-op and must not print a second password.
+	second, err := Seed(s, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,28 +80,37 @@ func TestSeedCreatesAdminAndImportsOnce(t *testing.T) {
 	}
 }
 
-func TestSeedNeverPersistsPlaintextSecret(t *testing.T) {
+func TestSeedWritesBuiltInDefaults(t *testing.T) {
 	s := openTestStore(t)
-	if _, err := Seed(s, testSeedConfig(), nil); err != nil {
+	if _, err := Seed(s, nil); err != nil {
 		t.Fatal(err)
 	}
-	var raw string
-	err := s.DB().QueryRow("SELECT config_json FROM channels WHERE type='telegram'").Scan(&raw)
+	defaults := config.Default()
+	settings := map[string]string{}
+	rows, err := s.DB().Query("SELECT key, value FROM settings")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(raw, "plaintext-secret") {
-		t.Fatalf("plaintext secret leaked into SQLite: %s", raw)
+	defer rows.Close()
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			t.Fatal(err)
+		}
+		settings[k] = v
 	}
-	var spec ChannelSpec
-	if err := json.Unmarshal([]byte(raw), &spec); err != nil {
+	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if spec.Options["url"] != "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" {
-		t.Errorf("placeholder must survive verbatim, got %q", spec.Options["url"])
-	}
-	if spec.Options["token"] != "" {
-		t.Errorf("plaintext token should be dropped, got %q", spec.Options["token"])
+	for key, want := range map[string]string{
+		"poll.interval":         defaults.Poll.Interval.String(),
+		"notify.subject_prefix": defaults.Notify.SubjectPrefix,
+		"notify.send_spacing":   defaults.Notify.SendSpacing.String(),
+		"http.user_agent":       defaults.HTTP.UserAgent,
+	} {
+		if got := settings[key]; got != want {
+			t.Errorf("settings[%q] = %q, want %q", key, got, want)
+		}
 	}
 }
 

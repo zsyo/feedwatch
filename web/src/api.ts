@@ -24,6 +24,14 @@ export function getCsrfToken(): string {
 
 const safeMethods = new Set(['GET', 'HEAD'])
 
+// One place to react to an expired session: the shell clears the in-memory
+// user and sends the browser back to the login screen with a redirect.
+let unauthorizedHandler: (() => void) | null = null
+
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  unauthorizedHandler = fn
+}
+
 export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
@@ -51,6 +59,11 @@ export async function request<T>(method: string, path: string, body?: unknown): 
     }
   }
   if (!response.ok) {
+    // Login and the bootstrap probe handle 401 themselves; everything else
+    // means the session expired mid-session.
+    if (response.status === 401 && path !== '/api/auth/login' && path !== '/api/auth/me') {
+      unauthorizedHandler?.()
+    }
     throw new ApiError(
       response.status,
       data?.error?.code ?? 'request_failed',

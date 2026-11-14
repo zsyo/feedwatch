@@ -20,15 +20,26 @@ type handler func(http.ResponseWriter, *http.Request, Ctx)
 
 type stateKey struct{}
 
+// Access levels a route can require.
+const (
+	// accessAny is any signed-in account.
+	accessAny = ""
+	// accessAdmin is the operations role: users, global settings, read-only data.
+	accessAdmin = "admin"
+	// accessMember is everything an administrator must NOT do for themselves:
+	// owning subscriptions and notification channels.
+	accessMember = "member"
+)
+
 // handle composes: recover/headers/access log → session auth → CSRF → rate
 // limit → role guard → audit → handler. Public routes still get the outer
 // layer and rate limiting, but a missing session is not fatal.
-func (s *Server) handle(role string, public bool, h handler) http.Handler {
+func (s *Server) handle(access string, public bool, h handler) http.Handler {
 	var next http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h(w, r, ctxFrom(r))
 	})
 	next = s.audit(next)
-	next = s.roleGuard(role, next)
+	next = s.roleGuard(access, next)
 	next = s.rateLimit(next)
 	next = s.csrf(next)
 	next = s.sessionAuth(public, next)
@@ -146,11 +157,21 @@ func (s *Server) csrf(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) roleGuard(role string, next http.Handler) http.Handler {
+func (s *Server) roleGuard(access string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if role == "admin" && !auth.IsAdmin(ctxPtr(r).User) {
-			fail(w, http.StatusForbidden, "forbidden", "administrator role required")
-			return
+		switch access {
+		case accessAdmin:
+			if !auth.IsAdmin(ctxPtr(r).User) {
+				fail(w, http.StatusForbidden, "forbidden", "administrator role required")
+				return
+			}
+		case accessMember:
+			// 403 rather than 404: this is a role rule, not a hidden resource.
+			if auth.IsAdmin(ctxPtr(r).User) {
+				fail(w, http.StatusForbidden, "role_not_allowed",
+					"administrators do not own subscriptions or channels; create a regular user and sign in as that user")
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})

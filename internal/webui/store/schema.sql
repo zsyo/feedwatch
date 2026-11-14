@@ -1,6 +1,8 @@
--- FeedWatch WebUI schema, version 1.
--- All tables are created up front: later feature points only add read/write
--- helpers, never a second migration. Executed inside migrate.go's transaction.
+-- FeedWatch WebUI schema, version 2.
+-- Every statement is IF NOT EXISTS, so running this on an older database only
+-- adds the tables it is missing. Adding a COLUMN to an existing table is not
+-- covered by this file: that needs a real incremental migration step.
+-- Executed inside migrate.go's transaction.
 -- Timestamp columns are RFC3339 UTC strings so they sort lexicographically.
 
 CREATE TABLE IF NOT EXISTS users (
@@ -51,6 +53,15 @@ CREATE TABLE IF NOT EXISTS channels (
   enabled      INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_channels_user ON channels(user_id);
+
+-- Channel credentials sealed with the master key (AES-256-GCM). Kept out of
+-- channels.config_json so no ordinary channel query, export or debug dump ever
+-- carries ciphertext; the row disappears with its channel.
+CREATE TABLE IF NOT EXISTS channel_secrets (
+  channel_id  INTEGER PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+  ciphertext  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
 
 -- Global poll pool: one row per normalized URL, fetched once per cycle no
 -- matter how many users subscribe to it.
@@ -123,6 +134,8 @@ CREATE TABLE IF NOT EXISTS deliveries (
   UNIQUE (cycle_id, user_id, channel_id, group_id, kind)
 );
 CREATE INDEX IF NOT EXISTS idx_deliveries_status ON deliveries(status);
+-- The admin drill-down lists one user's recent deliveries newest first.
+CREATE INDEX IF NOT EXISTS idx_deliveries_user ON deliveries(user_id, id);
 
 CREATE TABLE IF NOT EXISTS cycles (
   id           TEXT PRIMARY KEY,

@@ -35,7 +35,7 @@ func newAdminTestServer(t *testing.T, assets fs.FS) (*httptest.Server, *sql.DB) 
 	mustUser(t, db, "admin", "admin-pass", "admin", 0)
 	mustUser(t, db, "alice", "alice-pass", "user", 0)
 	am := auth.New(db, time.Hour, false)
-	ts := httptest.NewServer(New(st, am, assets, nil, "test-version").Handler())
+	ts := httptest.NewServer(New(st, am, assets, nil, "test-version", newTestSealer(t)).Handler())
 	t.Cleanup(ts.Close)
 	return ts, db
 }
@@ -311,6 +311,98 @@ func TestStaticAssetHeadersAndMethodAgnosticAPINotFound(t *testing.T) {
 		errBody := out["error"].(map[string]any)
 		if errBody["code"] != "not_found" {
 			t.Fatalf("%s /api/nope returned %+v", method, out)
+		}
+	}
+}
+
+func TestAdminUserDrillDownIsReadOnly(t *testing.T) {
+	ts, db := newAdminTestServer(t, stubAssets())
+	var aliceID int64
+	if err := db.QueryRow("SELECT id FROM users WHERE username='alice'").Scan(&aliceID); err != nil {
+		t.Fatal(err)
+	}
+
+	alice := login(t, ts, "alice", "alice-pass")
+	alice.do(http.MethodPost, "/api/subscriptions",
+		map[string]string{"url": "https://example.com/a.atom"}, http.StatusCreated)
+	created := alice.do(http.MethodPost, "/api/channels", map[string]any{
+		"type": "telegram", "fields": map[string]string{"chat_id": "1"},
+		"secrets": map[string]string{"token": "123:abc"},
+	}, http.StatusCreated)
+	channelID := int64(created["id"].(float64))
+
+	// A regular user must not reach the drill-down.
+	alice.do(http.MethodGet, "/api/admin/users/"+itoa(aliceID), nil, http.StatusForbidden)
+
+	admin := login(t, ts, "admin", "admin-pass")
+	detail := admin.do(http.MethodGet, "/api/admin/users/"+itoa(aliceID), nil, http.StatusOK)
+	if detail["user"].(map[string]any)["username"] != "alice" {
+		t.Fatalf("unexpected detail: %+v", detail)
+	}
+	counts := detail["counts"].(map[string]any)
+	if counts["subscriptions"].(float64) != 1 || counts["channels"].(float64) != 1 {
+		t.Fatalf("unexpected counts: %+v", counts)
+	}
+
+	subs := admin.do(http.MethodGet, "/api/admin/users/"+itoa(aliceID)+"/subscriptions", nil, http.StatusOK)
+	subItems := subs["subscriptions"].([]any)
+	if len(subItems) != 1 {
+		t.Fatalf("subscriptions = %+v", subs)
+	}
+	subID := int64(subItems[0].(map[string]any)["id"].(float64))
+
+	// Channel metadata is visible, credentials are not.
+	resp, err := admin.http.Get(ts.URL + "/api/admin/users/" + itoa(aliceID) + "/channels")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(raw), "123:abc") || strings.Contains(string(raw), "fwsec:") {
+		t.Fatalf("admin drill-down leaked a credential: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"secret_fields":["token"]`) {
+		t.Fatalf("admin drill-down should list secret field names: %s", raw)
+	}
+
+	// Enable/disable is allowed; anything else is a 400.
+	admin.do(http.MethodPatch, "/api/admin/users/"+itoa(aliceID)+"/channels/"+itoa(channelID),
+		map[string]any{"enabled": false}, http.StatusOK)
+	admin.do(http.MethodPatch, "/api/admin/users/"+itoa(aliceID)+"/channels/"+itoa(channelID),
+		map[string]any{"name": "renamed"}, http.StatusBadRequest)
+	admin.do(http.MethodPatch, "/api/admin/users/"+itoa(aliceID)+"/channels/"+itoa(channelID),
+		map[string]any{"enabled": true, "name": "renamed"}, http.StatusBadRequest)
+	admin.do(http.MethodPatch, "/api/admin/users/"+itoa(9999)+"/channels/"+itoa(channelID),
+		map[string]any{"enabled": true}, http.StatusNotFound)
+	admin.do(http.MethodPatch, "/api/admin/users/"+itoa(aliceID)+"/subscriptions/"+itoa(subID),
+		map[string]any{"enabled": false}, http.StatusOK)
+
+	// The admin cannot create or delete somebody else's resources at all.
+	admin.do(http.MethodPost, "/api/admin/users/"+itoa(aliceID)+"/channels",
+		map[string]any{"type": "log"}, http.StatusNotFound)
+	admin.do(http.MethodDelete, "/api/admin/users/"+itoa(aliceID)+"/channels/"+itoa(channelID),
+		nil, http.StatusNotFound)
+
+	deliveries := admin.do(http.MethodGet,
+		"/api/admin/users/"+itoa(aliceID)+"/deliveries?limit=10", nil, http.StatusOK)
+	if _, ok := deliveries["deliveries"].([]any); !ok {
+		t.Fatalf("unexpected deliveries payload: %+v", deliveries)
+	}
+
+	// Alice sees the enforced state.
+	channels := alice.do(http.MethodGet, "/api/channels", nil, http.StatusOK)
+	if channels["channels"].([]any)[0].(map[string]any)["enabled"] != false {
+		t.Fatalf("admin toggle was not applied: %+v", channels)
+	}
+}
+
+func TestMaskErrorTextStripsCredentials(t *testing.T) {
+	in := `telegram error 404: https://api.telegram.org/bot123:abc/sendMessage failed; ` +
+		`Authorization: Bearer sekrit; webhook?key=abcdef`
+	out := maskErrorText(in)
+	for _, leak := range []string{"123:abc", "sekrit", "abcdef"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("maskErrorText leaked %q: %s", leak, out)
 		}
 	}
 }

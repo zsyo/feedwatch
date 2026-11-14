@@ -24,7 +24,7 @@ func TestOpenMigratesEmptyDatabase(t *testing.T) {
 		t.Fatalf("schema version = %d, want %d", version, schemaVersion)
 	}
 	for _, table := range []string{
-		"users", "sessions", "subscriptions", "channels", "feed_pool",
+		"users", "sessions", "subscriptions", "channels", "channel_secrets", "feed_pool",
 		"seen_ids", "user_seen", "notifications", "delivery_groups",
 		"deliveries", "cycles", "settings", "audit_log",
 	} {
@@ -79,6 +79,56 @@ func TestOpenIsIdempotent(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("reopening wiped data: users = %d", count)
+	}
+}
+
+func TestOpenUpgradesVersionOneDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "feedwatch.db")
+	s, err := Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(
+		"INSERT INTO users (username, password_hash, role, created_at, updated_at) VALUES (?,?,?,?,?)",
+		"alice", "hash", "admin", Now(), Now(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a database created by the previous release: same tables, no
+	// channel_secrets, user_version = 1.
+	if _, err := s.DB().Exec(`DROP TABLE channel_secrets`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(`PRAGMA user_version = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("Open(v1 database): %v", err)
+	}
+	defer again.Close()
+	var version int
+	if err := again.DB().QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, schemaVersion)
+	}
+	var name string
+	if err := again.DB().QueryRow(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name='channel_secrets'").Scan(&name); err != nil {
+		t.Fatalf("channel_secrets was not added: %v", err)
+	}
+	var users int
+	if err := again.DB().QueryRow("SELECT COUNT(*) FROM users").Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if users != 1 {
+		t.Fatalf("upgrade lost rows: users = %d", users)
 	}
 }
 

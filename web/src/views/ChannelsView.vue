@@ -1,49 +1,71 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { api, errorMessage } from '../api'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
 
-interface ChannelSpec {
-  type: string
+type Kind = 'text' | 'password' | 'select' | 'bool' | 'list' | 'textarea'
+
+interface Field {
+  key: string
+  label: string
+  kind: Kind
+  scope: 'spec' | 'option' | 'secret'
+  required?: boolean
+  choices?: string[]
+  placeholder?: string
+  help?: string
+}
+
+interface ChannelConfig {
+  type?: string
   name?: string
   from?: string
   to?: string[]
   cc?: string[]
-  api_key_env?: string
   subject_prefix?: string
   options?: Record<string, string>
 }
+
 interface Channel {
   id: number
   type: string
   name: string
-  config: ChannelSpec
   enabled: boolean
+  config: ChannelConfig
+  secret_fields: string[]
+  secret_hints?: Record<string, string>
+  secret_state: 'ok' | 'missing' | 'error' | 'none'
 }
 
-interface FormState {
-  type: string
-  name: string
-  from: string
-  to: string
-  cc: string
-  api_key_env: string
-  subject_prefix: string
-  options: string
-}
-
-const blank = (): FormState => ({
-  type: 'email', name: '', from: '', to: '', cc: '', api_key_env: '', subject_prefix: '', options: '{}',
-})
-const form = ref<FormState>(blank())
-const editingId = ref<number | null>(null)
+const types = ref<string[]>([])
+const schema = ref<Record<string, Field[]>>({})
 const items = ref<Channel[]>([])
+const editing = ref<Channel | null>(null)
+const originalType = ref('')
+
+const form = reactive({ type: 'email', name: '' })
+const values = ref<Record<string, string>>({})
+const secrets = ref<Record<string, string>>({})
+const clearSecrets = ref<string[]>([])
+
 const err = ref('')
 const success = ref('')
 const busy = ref(false)
 
-const channelTypes = ['email', 'telegram', 'wecom', 'feishu', 'webhook', 'log']
+const fields = computed<Field[]>(() => schema.value[form.type] ?? [])
+const plainFields = computed(() => fields.value.filter((f) => f.scope !== 'secret'))
+const inlineFields = computed(() => plainFields.value.filter((f) => f.kind !== 'textarea'))
+const textareaFields = computed(() => plainFields.value.filter((f) => f.kind === 'textarea'))
+const secretFields = computed(() => fields.value.filter((f) => f.scope === 'secret'))
+const typeChanged = computed(() => editing.value !== null && editing.value.type !== form.type)
+
+const stateLabel: Record<Channel['secret_state'], string> = {
+  ok: '已配置',
+  missing: '缺少密钥',
+  error: '无法解密',
+  none: '无需密钥',
+}
 
 async function load(): Promise<void> {
   err.value = ''
@@ -54,62 +76,116 @@ async function load(): Promise<void> {
     err.value = errorMessage(e)
   }
 }
-onMounted(load)
 
-function list(value: string): string[] {
-  return value.split(',').map((v) => v.trim()).filter(Boolean)
+async function loadSchema(): Promise<void> {
+  try {
+    const out = await api.get<{ types: string[]; fields: Record<string, Field[]> }>('/api/channel-fields')
+    types.value = out.types
+    schema.value = out.fields
+    reset()
+  } catch (e) {
+    err.value = errorMessage(e)
+  }
 }
 
-function parseOptions(): Record<string, string> {
-  const raw = form.value.options.trim()
-  if (!raw) return {}
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    throw new Error('附加参数必须是合法的 JSON 对象')
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error('附加参数必须是 JSON 对象，例如 {"url": "https://..."}')
-  }
+onMounted(async () => {
+  await loadSchema()
+  await load()
+})
+
+function defaultsFor(type: string): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const [k, v] of Object.entries(parsed)) out[k] = String(v)
+  for (const field of schema.value[type] ?? []) {
+    if (field.scope !== 'secret') out[field.key] = field.kind === 'bool' ? 'false' : ''
+  }
   return out
 }
 
-function payload(): ChannelSpec {
-  const f = form.value
-  const spec: ChannelSpec = {
-    type: f.type,
-    name: f.name.trim(),
-    from: f.from.trim(),
-    to: list(f.to),
-    cc: list(f.cc),
-    api_key_env: f.api_key_env.trim(),
-    subject_prefix: f.subject_prefix.trim(),
-    options: parseOptions(),
+function reset(): void {
+  editing.value = null
+  originalType.value = ''
+  form.type = types.value[0] ?? 'email'
+  form.name = ''
+  values.value = defaultsFor(form.type)
+  secrets.value = {}
+  clearSecrets.value = []
+}
+
+function onTypeChange(next: string): void {
+  form.type = next
+  values.value = defaultsFor(next)
+  secrets.value = {}
+  clearSecrets.value = []
+}
+
+function fieldValue(ch: Channel, field: Field): string {
+  if (field.scope === 'spec') {
+    const raw = (ch.config as Record<string, unknown>)[field.key]
+    if (Array.isArray(raw)) return raw.join(', ')
+    return typeof raw === 'string' ? raw : ''
   }
-  return spec
+  return ch.config.options?.[field.key] ?? ''
+}
+
+function startEdit(ch: Channel): void {
+  editing.value = ch
+  originalType.value = ch.type
+  form.type = ch.type
+  form.name = ch.name
+  const next: Record<string, string> = {}
+  for (const field of schema.value[ch.type] ?? []) {
+    if (field.scope === 'secret') continue
+    next[field.key] = fieldValue(ch, field)
+  }
+  values.value = next
+  secrets.value = {}
+  clearSecrets.value = []
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function isSet(key: string): boolean {
+  if (!editing.value || typeChanged.value) return false
+  return editing.value.secret_fields.includes(key)
+}
+
+function secretPlaceholder(field: Field): string {
+  if (isSet(field.key)) return '已保存（留空则保持不变）'
+  return field.placeholder || (field.required ? '必填' : '选填')
+}
+
+function toggleClear(key: string): void {
+  const idx = clearSecrets.value.indexOf(key)
+  if (idx >= 0) clearSecrets.value.splice(idx, 1)
+  else {
+    clearSecrets.value.push(key)
+    secrets.value[key] = ''
+  }
+}
+
+function setBool(key: string, event: Event): void {
+  const target = event.target as HTMLInputElement
+  values.value[key] = target.checked ? 'true' : 'false'
 }
 
 async function submit(): Promise<void> {
   err.value = ''
   success.value = ''
-  let spec: ChannelSpec
-  try {
-    spec = payload()
-  } catch (e) {
-    err.value = errorMessage(e)
-    return
-  }
   busy.value = true
   try {
-    if (editingId.value === null) {
-      await api.post('/api/channels', spec)
-      success.value = '通知方式已创建'
-    } else {
-      await api.patch(`/api/channels/${editingId.value}`, spec)
+    const payload: Record<string, unknown> = {
+      type: form.type,
+      name: form.name.trim(),
+      fields: values.value,
+      // Empty inputs mean "keep what is stored"; only non-empty values are sent.
+      secrets: Object.fromEntries(Object.entries(secrets.value).filter(([, v]) => v !== '')),
+      clear_secrets: clearSecrets.value,
+    }
+    if (editing.value) {
+      await api.patch(`/api/channels/${editing.value.id}`, payload)
       success.value = '通知方式已更新'
+    } else {
+      await api.post('/api/channels', payload)
+      success.value = '通知方式已创建'
     }
     reset()
     await load()
@@ -120,25 +196,15 @@ async function submit(): Promise<void> {
   }
 }
 
-function reset(): void {
-  form.value = blank()
-  editingId.value = null
-}
-
-function startEdit(ch: Channel): void {
-  const c = ch.config
-  editingId.value = ch.id
-  form.value = {
-    type: ch.type || c.type || 'email',
-    name: ch.name || c.name || '',
-    from: c.from || '',
-    to: (c.to || []).join(', '),
-    cc: (c.cc || []).join(', '),
-    api_key_env: c.api_key_env || '',
-    subject_prefix: c.subject_prefix || '',
-    options: JSON.stringify(c.options || {}, null, 2),
+async function toggleEnabled(ch: Channel): Promise<void> {
+  err.value = ''
+  success.value = ''
+  try {
+    await api.patch(`/api/channels/${ch.id}`, { enabled: !ch.enabled })
+    await load()
+  } catch (e) {
+    err.value = errorMessage(e)
   }
-  window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 async function remove(ch: Channel): Promise<void> {
@@ -147,58 +213,117 @@ async function remove(ch: Channel): Promise<void> {
   success.value = ''
   try {
     await api.del(`/api/channels/${ch.id}`)
-    if (editingId.value === ch.id) reset()
+    if (editing.value?.id === ch.id) reset()
     success.value = '通知方式已删除'
     await load()
   } catch (e) {
     err.value = errorMessage(e)
   }
 }
+
+function summary(ch: Channel): string[] {
+  const out: string[] = []
+  if (ch.config.from) out.push(`from: ${ch.config.from}`)
+  if (ch.config.to?.length) out.push(`to: ${ch.config.to.join(', ')}`)
+  if (ch.config.cc?.length) out.push(`cc: ${ch.config.cc.join(', ')}`)
+  for (const [key, value] of Object.entries(ch.config.options ?? {})) {
+    if (value) out.push(`${key}: ${value}`)
+  }
+  if (ch.config.subject_prefix) out.push(`prefix: ${ch.config.subject_prefix}`)
+  return out
+}
 </script>
 
 <template>
-  <PageHeader title="通知方式" description="每个用户使用自己的密钥独立发送；密钥只以环境变量引用保存，绝不写入数据库。">
+  <PageHeader title="通知方式" description="通知只发给你自己：每个渠道使用你自己的凭据独立请求。凭据加密保存在本机，页面不会回显明文。">
     <button class="ghost" type="button" @click="load">刷新</button>
   </PageHeader>
   <Notice kind="error" :message="err" />
   <Notice kind="success" :message="success" />
 
   <div class="card">
-    <h2>{{ editingId === null ? '新增通知方式' : `编辑通知方式 #${editingId}` }}</h2>
+    <h2>{{ editing === null ? '新增通知方式' : `编辑通知方式 #${editing.id}` }}</h2>
     <p class="card-sub">
-      邮件密钥填环境变量名（如 <code class="mono">RESEND_API_KEY</code>）；webhook 类在附加参数里用
-      <code class="mono">${ENV_VAR}</code> 占位符，明文密钥会被服务端拒绝。
+      选择渠道后按提示填写即可。密钥类字段保存后只会显示「已配置」，再次编辑时留空表示沿用原值。
     </p>
     <form @submit.prevent="submit">
       <div class="form-row">
         <label>类型
-          <select v-model="form.type">
-            <option v-for="t in channelTypes" :key="t" :value="t">{{ t }}</option>
+          <select :value="form.type" @change="onTypeChange(($event.target as HTMLSelectElement).value)">
+            <option v-for="t in types" :key="t" :value="t">{{ t }}</option>
           </select>
         </label>
-        <label>名称<input v-model="form.name" placeholder="选填" /></label>
-        <label>发件人 From<input v-model="form.from" placeholder="email 类型使用" /></label>
-        <label>邮件密钥环境变量名<input v-model="form.api_key_env" placeholder="例如 RESEND_API_KEY" /></label>
-        <label>收件人 To（逗号分隔）<input v-model="form.to" placeholder="a@example.com, b@example.com" /></label>
-        <label>抄送 Cc（逗号分隔）<input v-model="form.cc" placeholder="选填" /></label>
-        <label>标题前缀<input v-model="form.subject_prefix" placeholder="选填" /></label>
+        <label>名称<input v-model="form.name" placeholder="选填，便于自己区分" /></label>
       </div>
-      <label>附加参数（JSON 对象）
-        <textarea v-model="form.options" spellcheck="false" placeholder='{"url": "https://api.example/bot${TG_TOKEN}/send"}'></textarea>
+
+      <div class="form-row">
+        <template v-for="field in inlineFields" :key="field.key">
+          <label v-if="field.kind === 'select'">{{ field.label }}
+            <select v-model="values[field.key]">
+              <option value="">默认</option>
+              <option v-for="choice in field.choices ?? []" :key="choice" :value="choice">{{ choice }}</option>
+            </select>
+          </label>
+          <label v-else-if="field.kind === 'bool'" class="check-line">
+            <input type="checkbox" :checked="values[field.key] === 'true'" @change="setBool(field.key, $event)" />
+            {{ field.label }}
+          </label>
+          <label v-else>{{ field.label }}
+            <input
+              v-model="values[field.key]"
+              :placeholder="field.placeholder || (field.required ? '必填' : '选填')"
+            />
+          </label>
+        </template>
+      </div>
+
+      <label v-for="field in textareaFields" :key="field.key">{{ field.label }}
+        <textarea v-model="values[field.key]" spellcheck="false" :placeholder="field.placeholder || ''"></textarea>
+        <span v-if="field.help" class="hint">{{ field.help }}</span>
       </label>
+
+      <template v-if="secretFields.length">
+        <h3 class="section-title">凭据</h3>
+        <div class="form-row">
+          <div v-for="field in secretFields" :key="field.key" class="secret-field">
+            <label>{{ field.label }}
+              <input
+                v-model="secrets[field.key]"
+                type="password"
+                autocomplete="new-password"
+                :disabled="clearSecrets.includes(field.key)"
+                :placeholder="secretPlaceholder(field)"
+              />
+            </label>
+            <p class="hint">
+              <template v-if="isSet(field.key) && !clearSecrets.includes(field.key)">
+                已保存<span v-if="editing?.secret_hints?.[field.key]">（{{ editing?.secret_hints?.[field.key] }}）</span>
+                · <button class="link" type="button" @click="toggleClear(field.key)">清除</button>
+              </template>
+              <template v-else-if="clearSecrets.includes(field.key)">
+                保存后将清除 ·
+                <button class="link" type="button" @click="toggleClear(field.key)">撤销</button>
+              </template>
+              <template v-else>{{ field.help || '保存后不再显示明文' }}</template>
+            </p>
+          </div>
+        </div>
+        <p class="hint">凭据用主密钥加密后写入本机数据库；管理员和其他用户都看不到，也不会出现在任何页面或日志里。</p>
+      </template>
+
       <div class="form-actions">
-        <button class="primary" type="submit" :disabled="busy">{{ editingId === null ? '添加' : '保存修改' }}</button>
-        <button v-if="editingId !== null" class="ghost" type="button" @click="reset">取消编辑</button>
+        <button class="primary" type="submit" :disabled="busy">{{ editing === null ? '添加' : '保存修改' }}</button>
+        <button v-if="editing !== null" class="ghost" type="button" @click="reset">取消编辑</button>
       </div>
     </form>
   </div>
 
   <div class="card">
     <h2>已配置的通知方式</h2>
-    <p class="card-sub">列表回显已脱敏；任何看起来像明文密钥的值都会显示为 ***。</p>
+    <p class="card-sub">密钥只显示「已配置」以及主机名提示，明文永不回显。</p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>类型 / 名称</th><th>配置</th><th>状态</th><th>操作</th></tr></thead>
+        <thead><tr><th>ID</th><th>类型 / 名称</th><th>配置</th><th>凭据</th><th>状态</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="ch in items" :key="ch.id">
             <td class="mono">{{ ch.id }}</td>
@@ -206,23 +331,34 @@ async function remove(ch: Channel): Promise<void> {
               <span class="badge">{{ ch.type }}</span>
               <div class="muted" style="margin-top: .3rem">{{ ch.name || '—' }}</div>
             </td>
-            <td class="mono" style="max-width: 420px; word-break: break-all">
-              <div v-if="ch.config.from">from: {{ ch.config.from }}</div>
-              <div v-if="ch.config.to?.length">to: {{ ch.config.to.join(', ') }}</div>
-              <div v-if="ch.config.cc?.length">cc: {{ ch.config.cc.join(', ') }}</div>
-              <div v-if="ch.config.api_key_env">api_key_env: {{ ch.config.api_key_env }}</div>
-              <div v-if="ch.config.subject_prefix">prefix: {{ ch.config.subject_prefix }}</div>
-              <div v-if="Object.keys(ch.config.options || {}).length">options: {{ JSON.stringify(ch.config.options) }}</div>
+            <td class="mono cell-config">
+              <div v-for="line in summary(ch)" :key="line">{{ line }}</div>
+              <div v-if="!summary(ch).length" class="muted">—</div>
             </td>
-            <td><span class="badge" :class="ch.enabled ? 'badge-on' : 'badge-off'">{{ ch.enabled ? '启用' : '停用' }}</span></td>
+            <td>
+              <div v-if="ch.secret_state === 'none'" class="muted">—</div>
+              <div v-else class="secret-tags">
+                <span v-for="key in ch.secret_fields" :key="key" class="tag">{{ key }} ✓</span>
+                <span v-if="!ch.secret_fields.length" class="tag">未设置</span>
+                <div v-if="ch.secret_hints && Object.keys(ch.secret_hints).length" class="hint">
+                  <div v-for="(hint, key) in ch.secret_hints" :key="key">{{ key }}: {{ hint }}</div>
+                </div>
+              </div>
+            </td>
+            <td>
+              <span class="badge" :class="ch.enabled ? 'badge-on' : 'badge-off'">{{ ch.enabled ? '启用' : '停用' }}</span>
+              <div v-if="ch.secret_state === 'missing'" class="badge badge-warn" style="margin-top: .3rem">缺少密钥</div>
+              <div v-else-if="ch.secret_state === 'error'" class="badge badge-danger" style="margin-top: .3rem">无法解密</div>
+            </td>
             <td>
               <div class="cell-actions">
                 <button class="small" type="button" @click="startEdit(ch)">编辑</button>
+                <button class="small" type="button" @click="toggleEnabled(ch)">{{ ch.enabled ? '停用' : '启用' }}</button>
                 <button class="small" type="button" @click="remove(ch)">删除</button>
               </div>
             </td>
           </tr>
-          <tr v-if="!items.length"><td colspan="5" class="empty">还没有通知方式。</td></tr>
+          <tr v-if="!items.length"><td colspan="6" class="empty">还没有通知方式。先添加一个，之后的更新会推送到这里。</td></tr>
         </tbody>
       </table>
     </div>

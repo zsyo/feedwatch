@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"feedwatch/internal/webui/api"
 	"feedwatch/internal/webui/auth"
 	"feedwatch/internal/webui/orchestrator"
+	"feedwatch/internal/webui/secrets"
 	"feedwatch/internal/webui/store"
 )
 
@@ -51,16 +53,26 @@ func runWebUI(cfgPath, logLevel, logFormat string, once, dryRun bool) error {
 	}
 	defer st.Close()
 
-	seedCfg, err := webui.LoadSeedConfig(cfgPath)
+	// The master key lives next to the database so a volume backup carries both.
+	// A failure here is fatal: running with a fresh key would silently orphan
+	// every stored channel credential.
+	sealer, err := secrets.LoadOrCreate(filepath.Dir(dbPath), log)
 	if err != nil {
 		return err
 	}
-	if _, err := webui.Seed(st, seedCfg, log); err != nil {
+
+	// The WebUI has no configuration file: a fresh database gets one admin and
+	// the built-in defaults, nothing else.
+	if _, err := webui.Seed(st, log); err != nil {
 		return fmt.Errorf("webui: seed database: %w", err)
 	}
+	if cfgPath != "" {
+		log.Warn("webui: -config is ignored; the WebUI variant is configured entirely in the browser",
+			"path", cfgPath)
+	}
 
-	// Global settings come from config.yaml only on first start; afterwards the
-	// settings table (editable via /api/admin/settings) is the source of truth.
+	// Seed writes the built-in defaults on an empty database; from then on the
+	// settings table (editable via /api/admin/settings) is the only source.
 	settings, err := st.Settings()
 	if err != nil {
 		return err
@@ -101,14 +113,14 @@ func runWebUI(cfgPath, logLevel, logFormat string, once, dryRun bool) error {
 		FetchSpacing:     dur("poll.request_spacing", 100*time.Millisecond),
 		SubjectPrefix:    settings["notify.subject_prefix"],
 	}, log)
-	worker := orchestrator.NewDeliveryWorker(st, log, dur("notify.send_spacing", 250*time.Millisecond))
+	worker := orchestrator.NewDeliveryWorker(st, log, dur("notify.send_spacing", 250*time.Millisecond), sealer)
 
 	assets, err := webui.Assets()
 	if err != nil {
 		return fmt.Errorf("webui: load embedded assets: %w", err)
 	}
 	am := auth.New(st.DB(), ttl, secure)
-	srv := api.New(st, am, assets, log, version)
+	srv := api.New(st, am, assets, log, version, sealer)
 
 	if dryRun {
 		log.Info("webui: -dry-run is ignored; the WebUI variant has no dry-run poll mode")

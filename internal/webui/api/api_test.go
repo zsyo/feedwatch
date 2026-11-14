@@ -18,8 +18,18 @@ import (
 	"time"
 
 	"feedwatch/internal/webui/auth"
+	"feedwatch/internal/webui/secrets"
 	"feedwatch/internal/webui/store"
 )
+
+func newTestSealer(t *testing.T) *secrets.Sealer {
+	t.Helper()
+	s, err := secrets.NewRandom()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
 
 func newTestServer(t *testing.T) (*httptest.Server, *sql.DB) {
 	t.Helper()
@@ -35,7 +45,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *sql.DB) {
 	assets := fstest.MapFS{
 		"stub.html": &fstest.MapFile{Data: []byte("<h1>placeholder</h1>")},
 	}
-	ts := httptest.NewServer(New(st, am, assets, nil, "test-version").Handler())
+	ts := httptest.NewServer(New(st, am, assets, nil, "test-version", newTestSealer(t)).Handler())
 	t.Cleanup(ts.Close)
 	return ts, db
 }
@@ -185,11 +195,18 @@ func TestMustChangePasswordBlocksOtherEndpoints(t *testing.T) {
 }
 
 func TestRoleGuardAndUserIsolation(t *testing.T) {
-	ts, _ := newTestServer(t)
+	ts, db := newTestServer(t)
+	mustUser(t, db, "bob", "bob-pass", "user", 0)
+
 	alice := login(t, ts, "alice", "alice-pass")
 	alice.do(http.MethodGet, "/api/admin/users", nil, http.StatusForbidden)
+
+	// Administrators are an operations role: they must not own subscriptions at
+	// all, so the member-only endpoints answer 403 instead of an empty list.
 	admin := login(t, ts, "admin", "admin-pass")
 	admin.do(http.MethodGet, "/api/admin/users", nil, http.StatusOK)
+	admin.do(http.MethodGet, "/api/subscriptions", nil, http.StatusForbidden)
+	admin.do(http.MethodGet, "/api/channels", nil, http.StatusForbidden)
 
 	alice.do(http.MethodPost, "/api/subscriptions",
 		map[string]string{"url": "https://example.com/private.atom"}, http.StatusCreated)
@@ -197,34 +214,121 @@ func TestRoleGuardAndUserIsolation(t *testing.T) {
 	items := list["subscriptions"].([]any)
 	id := int64(items[0].(map[string]any)["id"].(float64))
 
-	// Another user's id must not be visible, let alone writable.
-	other := login(t, ts, "admin", "admin-pass")
-	other.do(http.MethodPatch, "/api/subscriptions/"+itoa(id),
+	// Another regular user must not see or touch it.
+	bob := login(t, ts, "bob", "bob-pass")
+	bob.do(http.MethodPatch, "/api/subscriptions/"+itoa(id),
 		map[string]any{"display_name": "hijacked"}, http.StatusNotFound)
-	other.do(http.MethodDelete, "/api/subscriptions/"+itoa(id), nil, http.StatusNotFound)
-	mine := other.do(http.MethodGet, "/api/subscriptions", nil, http.StatusOK)
+	bob.do(http.MethodDelete, "/api/subscriptions/"+itoa(id), nil, http.StatusNotFound)
+	mine := bob.do(http.MethodGet, "/api/subscriptions", nil, http.StatusOK)
 	if got := len(mine["subscriptions"].([]any)); got != 0 {
-		t.Fatalf("admin sees another user's subscription: %+v", mine)
+		t.Fatalf("bob sees another user's subscription: %+v", mine)
 	}
 }
 
-func TestChannelRejectsAndMasksPlaintextSecrets(t *testing.T) {
-	ts, _ := newTestServer(t)
+func TestChannelSecretsAreSealedAndNeverEchoed(t *testing.T) {
+	ts, db := newTestServer(t)
 	c := login(t, ts, "alice", "alice-pass")
+
+	// Missing required credential.
 	c.do(http.MethodPost, "/api/channels", map[string]any{
-		"type": "telegram", "options": map[string]string{"token": "plaintext-secret"},
+		"type": "telegram", "fields": map[string]string{"chat_id": "123"},
 	}, http.StatusBadRequest)
+	// A credential smuggled into a plain field is rejected by name.
 	c.do(http.MethodPost, "/api/channels", map[string]any{
-		"type": "telegram", "options": map[string]string{"url": "https://api.example/bot${TG_TOKEN}/send"},
+		"type": "telegram", "fields": map[string]string{"chat_id": "123", "token": "123:abc"},
+	}, http.StatusBadRequest)
+	// Undeclared option.
+	c.do(http.MethodPost, "/api/channels", map[string]any{
+		"type": "telegram", "fields": map[string]string{"chat_id": "123", "nope": "1"},
+		"secrets": map[string]string{"token": "123:abc"},
+	}, http.StatusBadRequest)
+
+	created := c.do(http.MethodPost, "/api/channels", map[string]any{
+		"type":   "telegram",
+		"name":   "发布群",
+		"fields": map[string]string{"chat_id": "123", "parse_mode": "HTML"},
+		"secrets": map[string]string{
+			"token": "123:abc",
+		},
 	}, http.StatusCreated)
-	list := c.do(http.MethodGet, "/api/channels", nil, http.StatusOK)
-	items := list["channels"].([]any)
-	if len(items) != 1 {
-		t.Fatalf("unexpected channel list: %+v", list)
+	id := int64(created["id"].(float64))
+
+	// The raw response must not contain the secret or the sealed envelope.
+	resp, err := c.http.Get(ts.URL + "/api/channels")
+	if err != nil {
+		t.Fatal(err)
 	}
-	cfg := items[0].(map[string]any)["config"].(map[string]any)
-	if !strings.Contains(cfg["options"].(map[string]any)["url"].(string), "${TG_TOKEN}") {
-		t.Fatalf("placeholder was not preserved: %+v", cfg)
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(raw), "123:abc") || strings.Contains(string(raw), "fwsec:") {
+		t.Fatalf("channel list leaked a credential: %s", raw)
+	}
+
+	var ciphertext string
+	if err := db.QueryRow(`SELECT ciphertext FROM channel_secrets WHERE channel_id=?`, id).Scan(&ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(ciphertext, "fwsec:v1:") {
+		t.Fatalf("stored value is not a sealed envelope: %q", ciphertext)
+	}
+
+	channels := func() []any {
+		list := c.do(http.MethodGet, "/api/channels", nil, http.StatusOK)
+		return list["channels"].([]any)
+	}
+	first := channels()[0].(map[string]any)
+	if got := first["secret_state"]; got != "ok" {
+		t.Fatalf("secret_state = %v, want ok", got)
+	}
+	fields := first["secret_fields"].([]any)
+	if len(fields) != 1 || fields[0] != "token" {
+		t.Fatalf("secret_fields = %v, want [token]", fields)
+	}
+
+	// Editing everything except the credential must keep the stored token, even
+	// when the browser sends an empty string for it.
+	c.do(http.MethodPatch, "/api/channels/"+itoa(id), map[string]any{
+		"type":   "telegram",
+		"name":   "改名",
+		"fields": map[string]string{"chat_id": "456"},
+		"secrets": map[string]string{
+			"token": "",
+		},
+	}, http.StatusOK)
+	first = channels()[0].(map[string]any)
+	if got := first["secret_state"]; got != "ok" {
+		t.Fatalf("empty secret input wiped the token: secret_state = %v", got)
+	}
+	cfg := first["config"].(map[string]any)
+	if cfg["options"].(map[string]any)["chat_id"] != "456" {
+		t.Fatalf("options were not replaced: %+v", cfg)
+	}
+
+	// An explicit clear removes it.
+	c.do(http.MethodPatch, "/api/channels/"+itoa(id), map[string]any{
+		"type": "telegram", "fields": map[string]string{"chat_id": "456"},
+		"clear_secrets": []string{"token"},
+	}, http.StatusBadRequest) // token is required, so clearing alone is invalid
+
+	// Toggling enabled is a standalone operation.
+	c.do(http.MethodPatch, "/api/channels/"+itoa(id), map[string]any{"enabled": false}, http.StatusOK)
+	first = channels()[0].(map[string]any)
+	if first["enabled"] != false {
+		t.Fatalf("enabled was not toggled: %+v", first)
+	}
+
+	// Email keeps its API key in the sealed map, exposed only as a field name.
+	mail := c.do(http.MethodPost, "/api/channels", map[string]any{
+		"type":    "email",
+		"fields":  map[string]string{"from": "a@example.com", "to": "b@example.com"},
+		"secrets": map[string]string{"api_key": "re_secret"},
+	}, http.StatusCreated)
+	if mail["id"] == nil {
+		t.Fatalf("email channel was not created: %+v", mail)
+	}
+	list := channels()
+	if len(list) != 2 {
+		t.Fatalf("channels = %d, want 2", len(list))
 	}
 }
 

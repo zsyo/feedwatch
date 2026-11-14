@@ -130,6 +130,33 @@ td .cell-actions { display: flex; gap: .35rem; flex-wrap: wrap; }
 .notice-info { background: #eff8ff; border-color: #b2ddff; color: var(--info); }
 .notice code { display: block; margin-top: .4rem; font-size: .9rem; word-break: break-all; }
 
+/* ---------- secrets, banners, misc ---------- */
+.banner {
+  background: #eff8ff; border: 1px solid #b2ddff; color: var(--info);
+  border-radius: var(--radius); padding: .8rem 1rem; font-size: .86rem; margin-bottom: 1.2rem;
+}
+.link-button {
+  display: inline-block; padding: .5rem .9rem; border: 1px solid var(--border);
+  border-radius: 7px; background: #fff; color: #344054; font-size: .85rem;
+}
+.link-button:hover { background: #f2f4f7; }
+.section-title {
+  font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--muted); margin: 1.2rem 0 .4rem;
+}
+.check-line { display: flex; align-items: center; gap: .45rem; }
+.check-line input { width: auto; margin: 0; }
+.secret-tags { display: flex; flex-wrap: wrap; gap: .3rem; }
+.secret-field { min-width: 220px; }
+.link {
+  background: none; border: none; padding: 0; color: var(--accent);
+  font-size: inherit; text-decoration: underline;
+}
+.badge-warn { background: #fffaeb; color: #b54708; }
+.badge-danger { background: #fef3f2; color: var(--danger); }
+.cell-config { max-width: 420px; word-break: break-all; }
+.cell-url { max-width: 320px; word-break: break-all; }
+
 @media (max-width: 800px) {
   .layout { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; flex-direction: row; align-items: center; flex-wrap: wrap; gap: .6rem; }

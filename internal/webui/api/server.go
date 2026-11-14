@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"feedwatch/internal/webui/auth"
+	"feedwatch/internal/webui/secrets"
 	"feedwatch/internal/webui/store"
 )
 
@@ -32,15 +33,17 @@ type Server struct {
 	version string
 	buildID string
 	limiter *rateLimiter
+	sealer  *secrets.Sealer
 }
 
-func New(st *store.Store, am *auth.Manager, assets fs.FS, log *slog.Logger, version string) *Server {
+func New(st *store.Store, am *auth.Manager, assets fs.FS, log *slog.Logger, version string, sealer *secrets.Sealer) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Server{
 		db: st.DB(), auth: am, assets: assets, log: log,
 		version: version, buildID: readBuildID(assets), limiter: newRateLimiter(),
+		sealer: sealer,
 	}
 }
 

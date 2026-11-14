@@ -31,6 +31,15 @@ function clear(): void {
   setCsrfToken('')
 }
 
+// expireSession is called by the API layer when a request comes back 401: the
+// cookie is already gone, so drop the local state. Returns true when a user was
+// signed in, which lets the caller avoid a redundant redirect.
+export function expireSession(): boolean {
+  const wasSignedIn = user.value !== null
+  clear()
+  return wasSignedIn
+}
+
 // A 401 on /me simply means "not logged in"; any other transport failure still
 // leaves the app on the login screen instead of a blank page.
 export async function bootstrap(): Promise<void> {

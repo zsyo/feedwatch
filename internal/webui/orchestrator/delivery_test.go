@@ -8,12 +8,15 @@ import (
 	"errors"
 	"log/slog"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"feedwatch/internal/domain"
 	"feedwatch/internal/notifier"
+	"feedwatch/internal/webui/secrets"
 	"feedwatch/internal/webui/store"
 )
 
@@ -57,7 +60,11 @@ func newDeliveryHarness(t *testing.T, spacing time.Duration) *deliveryHarness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	w := NewDeliveryWorker(st, quietLog(), spacing)
+	sealer, err := secrets.NewRandom()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := NewDeliveryWorker(st, quietLog(), spacing, sealer)
 	w.now = func() time.Time { return fixedTime }
 	rec := &recordingNotifier{}
 	w.reg = notifier.NewRegistry()
@@ -264,5 +271,85 @@ func TestBareKindFallbackForFirstStartBaseline(t *testing.T) {
 	}
 	if sent != 1 || failed != 0 || h.rec.count() != 1 {
 		t.Fatalf("sent=%d failed=%d calls=%d", sent, failed, h.rec.count())
+	}
+}
+
+func addSealedChannel(t *testing.T, h *deliveryHarness, userID int64, typ, configJSON string, values map[string]string) int64 {
+	t.Helper()
+	res, err := h.db.Exec(`INSERT INTO channels (user_id, type, name, config_json, enabled) VALUES (?,?,?,?,?)`,
+		userID, typ, typ, configJSON, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := h.w.sealer.SealMap(values, secrets.ChannelAAD(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Exec(`INSERT INTO channel_secrets (channel_id, ciphertext, updated_at) VALUES (?,?,?)`,
+		id, sealed, fixedTime.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestSpecForMergesSealedSecrets(t *testing.T) {
+	h := newDeliveryHarness(t, 0)
+	u := addUser(t, h.db, "alice")
+
+	tg := addSealedChannel(t, h, u, "telegram",
+		`{"type":"telegram","options":{"chat_id":"42","parse_mode":"HTML"}}`,
+		map[string]string{"token": "123:abc", "headers_json": `{"X-Trace":"on"}`})
+	spec, err := h.w.specFor(tg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Options["chat_id"] != "42" || spec.Options["parse_mode"] != "HTML" {
+		t.Fatalf("stored options were not preserved: %#v", spec.Options)
+	}
+	if spec.Options["token"] != "123:abc" {
+		t.Fatalf("sealed token was not merged: %#v", spec.Options)
+	}
+	if spec.Options["header.X-Trace"] != "on" {
+		t.Fatalf("headers_json was not expanded: %#v", spec.Options)
+	}
+
+	mail := addSealedChannel(t, h, u, "email",
+		`{"type":"email","from":"a@example.com","to":["b@example.com"]}`,
+		map[string]string{"api_key": "re_1"})
+	spec, err = h.w.specFor(mail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.APIKey != "re_1" {
+		t.Fatalf("api_key did not become NotifierSpec.APIKey: %q", spec.APIKey)
+	}
+	if spec.From != "a@example.com" || len(spec.To) != 1 {
+		t.Fatalf("email envelope lost: %#v", spec)
+	}
+}
+
+func TestSpecForFailsLoudlyOnWrongMasterKey(t *testing.T) {
+	h := newDeliveryHarness(t, 0)
+	u := addUser(t, h.db, "alice")
+	id := addSealedChannel(t, h, u, "telegram", `{"type":"telegram"}`, map[string]string{"token": "123:abc"})
+
+	other, err := secrets.NewRandom()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.w.sealer = other
+	_, err = h.w.specFor(id)
+	if err == nil {
+		t.Fatal("a different master key must not decrypt the channel")
+	}
+	if !strings.Contains(err.Error(), "channel "+strconv.FormatInt(id, 10)) {
+		t.Fatalf("error should name the channel, got %v", err)
+	}
+	if strings.Contains(err.Error(), "fwsec:") {
+		t.Fatalf("error leaked the ciphertext: %v", err)
 	}
 }

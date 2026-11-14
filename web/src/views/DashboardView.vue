@@ -32,18 +32,22 @@ const countLabels: Array<[string, string]> = [
   ['delivery_failed', '已放弃'], ['cycles', '轮询轮次'], ['notifications', '已生成通知'],
 ]
 
+// Administrators have no subscriptions of their own, so their dashboard is the
+// operations view only; asking the member endpoints would just return 403.
 async function load(): Promise<void> {
   err.value = ''
   try {
-    const [s, c, m] = await Promise.all([
+    meta.value = await api.get<{ version: string; build_id: string }>('/api/meta')
+    if (isAdmin.value) {
+      overview.value = await api.get<Overview>('/api/admin/overview')
+      return
+    }
+    const [s, c] = await Promise.all([
       api.get<{ subscriptions: unknown[] }>('/api/subscriptions'),
       api.get<{ channels: unknown[] }>('/api/channels'),
-      api.get<{ version: string; build_id: string }>('/api/meta'),
     ])
     subs.value = s.subscriptions
     channels.value = c.channels
-    meta.value = m
-    if (isAdmin.value) overview.value = await api.get<Overview>('/api/admin/overview')
   } catch (e) {
     err.value = errorMessage(e)
   }
@@ -52,27 +56,49 @@ onMounted(load)
 </script>
 
 <template>
-  <PageHeader title="概览" :description="`欢迎回来，${user?.username ?? ''}。这里汇总你的订阅与（管理员可见的）全局运行状态。`">
+  <PageHeader title="概览" :description="`欢迎回来，${user?.username ?? ''}。`">
     <button class="ghost" type="button" @click="load">刷新</button>
   </PageHeader>
   <Notice kind="error" :message="err" />
 
+  <div v-if="isAdmin" class="banner">
+    当前是管理员账号：只能管理用户与查看运行数据，不能自己配置订阅或通知。需要订阅时请创建普通用户，并用该用户登录。
+  </div>
+
   <div class="stat-grid" style="margin-bottom: 1.2rem">
-    <div class="stat"><span class="label">我的订阅</span><span class="value">{{ subs.length }}</span></div>
-    <div class="stat"><span class="label">我的通知方式</span><span class="value">{{ channels.length }}</span></div>
+    <template v-if="isAdmin">
+      <div class="stat"><span class="label">用户</span><span class="value">{{ overview?.counts.users ?? '—' }}</span></div>
+      <div class="stat"><span class="label">订阅总数</span><span class="value">{{ overview?.counts.subscriptions ?? '—' }}</span></div>
+      <div class="stat"><span class="label">通知渠道</span><span class="value">{{ overview?.counts.channels ?? '—' }}</span></div>
+      <div class="stat"><span class="label">待投递</span><span class="value">{{ overview?.counts.pending ?? '—' }}</span></div>
+    </template>
+    <template v-else>
+      <div class="stat"><span class="label">我的订阅</span><span class="value">{{ subs.length }}</span></div>
+      <div class="stat"><span class="label">我的通知方式</span><span class="value">{{ channels.length }}</span></div>
+    </template>
     <div class="stat"><span class="label">版本</span><span class="value" style="font-size: 1.1rem">{{ meta.version || 'dev' }}</span></div>
     <div class="stat"><span class="label">前端构建</span><span class="value mono" style="font-size: .9rem">{{ meta.build_id || 'dev' }}</span></div>
   </div>
 
   <div class="grid-2">
     <div class="card">
-      <h2>快速开始</h2>
-      <p class="card-sub">订阅一个 release.atom 地址，再配置一种通知方式即可开始接收更新。</p>
-      <div class="form-actions">
-        <RouterLink to="/subscriptions" class="ghost" style="padding: .5rem .9rem; border: 1px solid var(--border); border-radius: 7px">管理订阅</RouterLink>
-        <RouterLink to="/channels" class="ghost" style="padding: .5rem .9rem; border: 1px solid var(--border); border-radius: 7px">管理通知方式</RouterLink>
-      </div>
-      <p class="hint">同一 URL 只会在每轮抓取一次；新订阅从当前基线开始，不会补发历史版本。</p>
+      <h2>{{ isAdmin ? '运维入口' : '快速开始' }}</h2>
+      <template v-if="isAdmin">
+        <p class="card-sub">创建普通用户、查看轮询池与投递状态。用户的订阅与通知只能启停，不能代改。</p>
+        <div class="form-actions">
+          <RouterLink to="/admin/users" class="link-button">用户管理</RouterLink>
+          <RouterLink to="/admin/pool" class="link-button">轮询池</RouterLink>
+          <RouterLink to="/admin/ratelimit" class="link-button">限速状态</RouterLink>
+        </div>
+      </template>
+      <template v-else>
+        <p class="card-sub">订阅一个 release.atom 地址，再配置一种通知方式即可开始接收更新。</p>
+        <div class="form-actions">
+          <RouterLink to="/subscriptions" class="link-button">管理订阅</RouterLink>
+          <RouterLink to="/channels" class="link-button">管理通知方式</RouterLink>
+        </div>
+        <p class="hint">同一 URL 只会在每轮抓取一次；新订阅从当前基线开始，不会补发历史版本。</p>
+      </template>
     </div>
 
     <div v-if="isAdmin" class="card">

@@ -32,7 +32,7 @@ import (
 )
 
 // version can be overridden with -ldflags "-X main.version=...".
-var version = "1.0.0"
+var version = "1.2.0"
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -232,7 +232,19 @@ func run() error {
 
 	// webui builds take over here. The base build has a constant-false stub, so
 	// the linker removes this branch and config.Load remains the first real step.
-	if handled, err := webuiLaunch(*cfgPath, *logLevel, *logFormat, *once, *dryRun); handled {
+	// The variant has no config file at all, so hand it "" unless the user really
+	// typed -config: the flag default would otherwise look like a real request.
+	configSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "config" {
+			configSet = true
+		}
+	})
+	webuiCfg := ""
+	if configSet {
+		webuiCfg = *cfgPath
+	}
+	if handled, err := webuiLaunch(webuiCfg, *logLevel, *logFormat, *once, *dryRun); handled {
 		return err
 	}
 
