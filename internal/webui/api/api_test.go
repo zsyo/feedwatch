@@ -31,7 +31,9 @@ func newTestSealer(t *testing.T) *secrets.Sealer {
 	return s
 }
 
-func newTestServer(t *testing.T) (*httptest.Server, *sql.DB) {
+// opts let preset-sync tests inject a Loader pointed at a local test server;
+// every existing caller keeps working with no options.
+func newTestServer(t *testing.T, opts ...Option) (*httptest.Server, *sql.DB) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "feedwatch.db"), nil)
 	if err != nil {
@@ -45,7 +47,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *sql.DB) {
 	assets := fstest.MapFS{
 		"stub.html": &fstest.MapFile{Data: []byte("<h1>placeholder</h1>")},
 	}
-	ts := httptest.NewServer(New(st, am, assets, nil, "test-version", newTestSealer(t)).Handler())
+	ts := httptest.NewServer(New(st, am, assets, nil, "test-version", newTestSealer(t), opts...).Handler())
 	t.Cleanup(ts.Close)
 	return ts, db
 }
