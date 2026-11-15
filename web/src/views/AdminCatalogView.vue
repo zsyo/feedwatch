@@ -7,40 +7,8 @@ import PageHeader from '../components/PageHeader.vue'
 import { copyText, kindLabel, statusBadge, statusLabel } from '../catalog'
 import type { CatalogCategory, CatalogEntry, CatalogMeta, CatalogSubmission } from '../catalog'
 import type { PresetSyncResult } from '../presets'
-
-interface AdminCatalogResponse {
-  entries: CatalogEntry[]
-  categories: CatalogCategory[]
-  pending_count: number
-  meta: CatalogMeta
-}
-interface ReviewResponse {
-  submissions: CatalogSubmission[]
-  categories: CatalogCategory[]
-}
-interface ImportResult {
-  ok: boolean
-  created: number
-  updated: number
-  skipped: number
-}
-// Only metadata travels between installations. The backend validates every
-// field again, so this shape is checked loosely here and strictly in Go.
-interface CatalogDocument {
-  format: string
-  version: number
-  exported_at?: string
-  categories: Array<{ name: string }>
-  entries: Array<{
-    name: string
-    url: string
-    category: string
-    description: string
-    homepage: string
-    enabled: boolean
-  }>
-  strategy?: string
-}
+import { fetchCatalog, fetchReviews } from '../catalogAdmin'
+import type { CatalogDocument, ImportResult } from '../catalogAdmin'
 
 const entries = ref<CatalogEntry[]>([])
 const categories = ref<CatalogCategory[]>([])
@@ -62,8 +30,8 @@ async function load(): Promise<void> {
     // Both GETs are safe methods; the server serializes them on its single
     // SQLite connection, so there is no need to sequence them here.
     const [catalog, review] = await Promise.all([
-      api.get<AdminCatalogResponse>('/api/admin/catalog'),
-      api.get<ReviewResponse>(`/api/admin/catalog/submissions?status=${reviewFilter.value}`),
+      fetchCatalog(),
+      fetchReviews(reviewFilter.value),
     ])
     entries.value = catalog.entries
     categories.value = catalog.categories
