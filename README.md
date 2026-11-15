@@ -2,7 +2,7 @@
 
 一个 Go 常驻程序：按配置轮询 `releases.atom`，发现**新的稳定版本**后推送通知。通知渠道支持 Resend 邮件，以及企业微信、飞书、钉钉、Telegram、Slack、Discord、Teams、Bark、ntfy 和通用 Webhook，**可同时推送到多个渠道**。数据源、通知渠道、状态存储都是可插拔接口（当前数据源仍只有 Atom）。
 
-**两种镜像变体**：不带后缀的 base 镜像保持纯 `config.yaml` 手动配置（无前端资源、无 HTTP 服务、无 SQLite）；`-webui` 变体额外提供多用户 Web 管理界面、登录鉴权与 SQLite 存储，**空库启动、不需要任何配置文件**，首个管理员密码在容器日志里打印一次。两者由同一个 `//go:build webui` 开关隔离，base 二进制不链接任何 WebUI / SQLite 代码，详见 [WebUI 变体](#webui-变体)。
+**两种镜像变体**：不带后缀的 base 镜像保持纯 `config.yaml` 手动配置（无前端资源、无 HTTP 服务、无 SQLite）；`-webui` 变体额外提供多用户 Web 管理界面、登录鉴权与数据库存储（SQLite / MySQL / PostgreSQL），**空库启动、不需要任何配置文件**，首个管理员密码在容器日志里打印一次。两者由同一个 `//go:build webui` 开关隔离，base 二进制不链接任何 WebUI / SQLite 代码，详见 [WebUI 变体](#webui-变体)。
 
 当前默认监控三个仓库（均已验证可用）：
 
@@ -316,7 +316,7 @@ rootless 还有两点差异：容器绑不了 1024 以下端口（默认 8080 �
 | 镜像 tag | 版本号 / `latest` | 版本号加 `-webui`（如 `1.2.3-webui`），移动指针是 `webui` |
 | 配置来源 | 每次启动读 `config.yaml` | **不读 `config.yaml`**：空库启动，订阅 / 通知方式 / 密钥全部在页面里配 |
 | 界面 / 接口 | 无 | Vue 3 SPA + `/api/*`，默认监听 `:8080` |
-| 状态 | `data/state.json`（JSON 原子写） | SQLite WAL（`/app/data/feedwatch.db` 及 `-wal` / `-shm`）+ `secret.key`；库内含订阅目录（`catalog_entries`）、审核提交（`submissions`）与远程预设状态（`catalog_preset_state`）表（schema v6） |
+| 状态 | `data/state.json`（JSON 原子写） | 关系库（默认 SQLite WAL `/app/data/feedwatch.db` 及 `-wal` / `-shm`，也可换 MySQL / PostgreSQL）+ `secret.key`；库内含订阅目录（`catalog_entries`）、审核提交（`submissions`）与远程预设状态（`catalog_preset_state`）表（schema v7） |
 | 用户 | 单用户（配置即全部订阅） | 多用户 + 管理员，订阅与渠道按用户隔离 |
 | 密钥来源 | 环境变量（`${ENV_VAR}` 展开） | 页面填写，AES-256-GCM 加密后存库，不可回读 |
 
@@ -333,6 +333,42 @@ docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里
 **不需要 `config.yaml`，也不需要任何渠道密钥变量**：容器首启就是一个干净的空库，只有 `users` 表里那条 `admin` 记录、一套默认设置，以及 8 条示例订阅目录（GitHub 仓库的 `releases.atom`）和 3 个分类。示例只是可浏览的模板，**不会给任何人创建订阅**；老库升级不会自动获得，可在「订阅管理 → 导入导出」加载。浏览器打开 `http://<宿主机>:8080`（端口由 `.env` 的 `WEBUI_HTTP_PORT` 控制），用日志里的 `admin` 密码登录，**首次登录会被强制改密**；改密后所有旧会话立即失效。管理员可在「用户管理」里新建账号或重置密码（新密码只在页面上显示一次）。
 
 若经 HTTPS 反向代理访问，把 `.env` 的 `FEEDWATCH_WEBUI_COOKIE_SECURE` 设为 `true`；纯 HTTP 直连时务必保持 `false`，否则会话 cookie 带 `Secure` 标志、浏览器不会回传，导致无法登录。会话有效期由 `FEEDWATCH_WEBUI_SESSION_TTL` 控制（默认 `168h`）。
+
+### 数据库后端
+
+默认是 SQLite（`data/feedwatch.db`），也可以直接跑在 MySQL 或 PostgreSQL 上。切换只由环境变量决定，**没有配置文件里的数据库段**：
+
+| 变量 | 说明 |
+| --- | --- |
+| `FEEDWATCH_DB_DRIVER` | `sqlite`（默认）/ `mysql` / `postgres`，也接受 `mariadb` / `postgresql` / `pg` |
+| `FEEDWATCH_DB_DSN` | 驱动自己的连接串；sqlite 时就是文件路径。设了它就不再读 `FEEDWATCH_DB_PATH` |
+| `FEEDWATCH_DB_PATH` | 只用于 sqlite 的路径，默认 `data/feedwatch.db`（向后兼容，等价于把路径写进 DSN） |
+| `FEEDWATCH_DB_MAX_OPEN_CONNS` | 网络后端的连接池上限，默认 10；sqlite 忽略（固定单连接） |
+| `FEEDWATCH_DATA_DIR` | 只放 `secret.key` 的目录；sqlite 默认取库文件所在目录，网络后端默认 `data` |
+
+```bash
+# MySQL 8.0.16+（InnoDB / utf8mb4）
+FEEDWATCH_DB_DRIVER=mysql \
+FEEDWATCH_DB_DSN='feedwatch:secret@tcp(127.0.0.1:3306)/feedwatch?charset=utf8mb4' \
+FEEDWATCH_DATA_DIR=/var/lib/feedwatch \
+./feedwatch-webui
+
+# PostgreSQL 12+
+FEEDWATCH_DB_DRIVER=postgres \
+FEEDWATCH_DB_DSN='postgres://feedwatch:secret@127.0.0.1:5432/feedwatch?sslmode=disable' \
+FEEDWATCH_DATA_DIR=/var/lib/feedwatch \
+./feedwatch-webui
+```
+
+- **只支持空库起步**，不提供从 SQLite 迁移存量数据的工具。换库等于新库：管理员密码会重新打印一次，渠道凭据要在页面上重填。
+- **`secret.key` 与数据库必须同进同退**。网络后端没有库文件，`secret.key` 落在 `FEEDWATCH_DATA_DIR`，务必挂卷并与库一起备份；丢了它，库里所有渠道凭据都解不开，而且程序**不会**重新生成。
+- 三种后端写的是同一套逻辑 schema（18 张业务/目录表 + `schema_migrations` + 17 个索引）。MySQL 有两处实现差异：它没有部分索引，三个「只对部分行唯一」的索引改用 STORED 生成列 + 普通唯一索引等价实现；`TEXT` 不能带字面量默认值，所以长文本列写成 `DEFAULT ('')`（这是 8.0.13+ 的硬性要求，加上 `CHECK` 约束实际要 8.0.16+）。`feed_pool.url` 在 MySQL 上不加唯一约束——2048 字符在 utf8mb4 下无法建唯一索引，而它的身份本来就由 `url_key`（sha256）承担。
+- 字符串比较口径：MySQL 表用 `utf8mb4_bin`，与 SQLite 的字节序对齐（默认的 `utf8mb4_0900_ai_ci` 会把 `News` / `news` 当成同一个分类）；PostgreSQL 的 `ORDER BY` 跟随库的 collation，但列表排序都在前端算，看不到差异。
+- 连接串里的密码不会进日志：启动行只打印 `driver` 和脱敏后的 DSN。
+- 迁移版本记在 `schema_migrations` 表里；SQLite 同时继续维护 `PRAGMA user_version`，1.1.x 的库直接沿用，不需要手工干预。
+- 仍是**单实例**：连接池可以调大，但后台 orchestrator 只有一个，多实例共写同一个库会产生重复投递。
+- 方言差异全部收在 `internal/webui/store`：`dialect.go` 负责占位符重写（PG 的 `$1`）与 insert-ignore / upsert / returning-id 生成，三份 DDL 分别是 `schema_sqlite.sql` / `schema_mysql.sql` / `schema_postgres.sql`，`TestSchemaFilesAgree` 钉住三者的表与列一致。**新增查询照常写 `?` 占位符与普通 SQL 即可**，只有 `ON CONFLICT ... SET <字面量>` 这类写法才需要按方言分支。
+- 想连真实服务器验证（本机没有实例时）：`FEEDWATCH_TEST_MYSQL_DSN=... FEEDWATCH_TEST_POSTGRES_DSN=... go test -tags webui -run TestNetworkBackend ./internal/webui/store/`。它会建表、跑一遍 upsert / 唯一冲突 / 偏唯一索引 / 中文往返，最后 DROP 所有表，**只能指向一次性测试库**。
 
 ### 身份与权限
 
@@ -409,6 +445,7 @@ docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里
 make build-webui                 # 或 sh web/build.sh，产物写入 internal/webui/embedded/（已 gitignore）
 go build -tags webui -o feedwatch-webui.exe ./cmd/feedwatch
 FEEDWATCH_DB_PATH=data/feedwatch.db FEEDWATCH_HTTP_ADDR=127.0.0.1:8080 ./feedwatch-webui.exe
+FEEDWATCH_DB_DRIVER=postgres FEEDWATCH_DB_DSN='postgres://fw:fw@127.0.0.1:5432/fw?sslmode=disable' ./feedwatch-webui.exe
 ./feedwatch-webui.exe -once      # 离线冒烟：抓一轮 → 生成投递计划 → 投递一轮后退出
 ```
 
@@ -437,7 +474,7 @@ WebUI 变体**不接受 `-config`**：传了只会记一条 `-config is ignored;
 
 1.1.0 起不再读 `config.yaml`，渠道密钥改为页面填写 + 加密落库。旧库能直接打开（`PRAGMA user_version` 从 1 迁到 2，只新增 `channel_secrets` 等表，不动旧数据），但**旧渠道里存的还是环境变量名 / 占位符，无法自动转成密文**，需要在「通知方式」页把凭据重填一次，否则 `secret_state` 会显示 `missing`、投递报缺少凭据。
 
-`PRAGMA user_version` 的迁移是累加式的，每一步只补表 / 补列，不重建已有表、不动业务数据：
+迁移是累加式的，每一步只补表 / 补列 / 改列名，不重建已有表、不动业务数据（v7 起版本号记在 `schema_migrations`，SQLite 同时维护 `PRAGMA user_version` 以兼容旧库）：
 
 | schema 版本 | 变化 |
 | --- | --- |
@@ -446,6 +483,9 @@ WebUI 变体**不接受 `-config`**：传了只会记一条 `-config is ignored;
 | v4 | `users.notify_mode`（通知形式改为账号级）；老库残留的 `subscriptions.mode` 列不读不写 |
 | v5 | `catalog_categories` / `catalog_entries` / `submissions`（订阅中心） |
 | v6 | `catalog_preset_state` 表 + `catalog_entries` 的 `preset_key` / `preset_version` / `preset_edited` 三列与偏唯一索引（远程预设） |
+| v7 | 支持 MySQL / PostgreSQL：`settings.key` → `setting_key`、`notifications.text` → `body`（这两个名字在 MySQL 里分别是保留字与类型名），版本号改记在 `schema_migrations` 表 |
+
+v7 只做两处列改名（SQLite 的 `ALTER TABLE ... RENAME COLUMN`，存量数据原样保留），不改任何业务语义；改名原因是 `key` 在 MySQL 是保留字、`text` 是类型名，留着就必须按方言写不同的引号。
 
 v5 **只新增三张表**，老库升级后不会自动获得示例目录（种子只在 `users` 为空时执行）；想预置示例，可在「订阅管理 → 导入导出」加载一份从新库导出的 JSON。v6 通过 `ensureColumn()` 给老库的 `catalog_entries` 补三列（默认 `''` / `0` / `0`），并在补列之后才建偏唯一索引 `WHERE preset_key <> ''`（存量行都是空串，不受影响）；**不会重建表、不改动业务数据**。升级后第一次点「获取远程预设数据」，会按 URL 认领已有的示例 / 手工 / 导入条目并按版本升级，不会生成重复行。其余功能升级后直接可用，无需手工改数据。备份时数据库与 `secret.key` 一起带上即可，目录与预设状态都在同一个库里。
 
@@ -601,7 +641,7 @@ internal/watcher/             base 核心编排：有界并发抓取 → 过滤 
 internal/webui/               WebUI 变体（全部 //go:build webui）：首启只建 admin、渠道字段表、URL 规范化、embed 资源
 internal/webui/catalogspec.go 订阅目录的字段上限、URL 安全校验、内置示例、导入导出结构（Go 侧唯一真源）
 internal/webui/secrets/       主密钥加载与 AES-256-GCM 信封加密（唯一知道密钥的包）
-internal/webui/store/         SQLite 建表/迁移/WAL/目录可写性预检（schema v6，含三张目录表与预设状态表）
+internal/webui/store/         连接与方言层（SQLite / MySQL / PostgreSQL）、三份 DDL、迁移版本表、WAL 与目录可写性预检（schema v7）
 internal/webui/auth/          bcrypt 密码、session、CSRF
 internal/webui/presets/       远程预设的 JSON 校验、加载器与 SSRF 防护（纯函数 + 网络，不碰数据库）
 internal/webui/api/           HTTP server、中间件链、/api/* 端点与 SPA 静态服务；catalog.go / catalog_admin.go / catalog_presets.go 是订阅中心与远程同步
@@ -612,7 +652,7 @@ presets/                     远程预设数据：manifest.json + 4 个分类 JS
 testdata/                     测试用 feed 夹具
 ```
 
-base 二进制只链接两个外部模块：`go.yaml.in/yaml/v4`、`github.com/resend/resend-go/v4`；`-tags webui` 变体额外链接 `modernc.org/sqlite`（纯 Go、无需 cgo）与 `golang.org/x/crypto/bcrypt`。`go.mod` 会同时列出这些依赖，但链接器把 WebUI 依赖从 base 二进制中剔除。Atom 解析用标准库 `encoding/xml`。
+base 二进制只链接两个外部模块：`go.yaml.in/yaml/v4`、`github.com/resend/resend-go/v4`；`-tags webui` 变体额外链接 `modernc.org/sqlite`、`github.com/go-sql-driver/mysql`、`github.com/jackc/pgx/v5`（三者都是纯 Go、无需 cgo）与 `golang.org/x/crypto/bcrypt`。`go.mod` 会同时列出这些依赖，但链接器把 WebUI 依赖从 base 二进制中剔除。Atom 解析用标准库 `encoding/xml`。
 
 > YAML 依赖说明：原 `gopkg.in/yaml.v3`（`go-yaml/yaml`）已于 2025 年 4 月被作者标记为 unmaintained；官方 YAML 组织接管的正统继任者是 `go.yaml.in/yaml/*`，其中 v3 为冻结 API（仅安全修复），**v4 是当前活跃维护的稳定版**，故本项目直接使用 v4。`github.com/goccy/go-yaml` 是另一个从零重写的独立实现，与官方继任者无关，本项目未采用。配置解析仍用经典 `Unmarshal` API 以保持行为稳定；两个自定义 `UnmarshalYAML(*yaml.Node)` 钩子的 `Node` 必须来自同一模块，否则 v4 会报迁移错误。
 
@@ -657,7 +697,7 @@ actionlint .github/workflows/docker-publish.yml
 
 ## 已知限制
 
-- 单实例设计：多个实例共写同一状态文件会竞态；WebUI 变体同理（SQLite `SetMaxOpenConns(1)` + 单个 orchestrator）。
+- 单实例设计：多个实例共写同一状态文件会竞态；WebUI 变体同理（单个 orchestrator；SQLite 额外固定 `SetMaxOpenConns(1)`，MySQL / PostgreSQL 只是连接池可调，并发实例仍会重复投递）。
 - GitHub feed 未认证访问有限流；默认 30 分钟 × 3 个源约 6 次/小时，并启用 ETag/304、`poll.concurrency` / `request_spacing` 削峰与指数退避。
 - `From` 必须是 Resend 已验证域名，否则发送会 403。
 - `best_effort` 策略下，某个渠道持续失败会丢弃该渠道的后续通知（只留 ERROR 日志），以保证其它渠道不被重复轰炸；要求不漏推送请改用 `strict`。
@@ -670,7 +710,7 @@ actionlint .github/workflows/docker-publish.yml
 - 「审核中」页会把待审 URL 明文展示给全体普通用户并允许复制，所以目录 URL 的 http/https、无 userinfo、无敏感 query 校验**不能放宽**；FeedWatch 不验证这些链接的内容、可用性与安全性，手动复制添加前需自行判断。
 - `presets.base_url` 默认指向官方仓库的 `main` 分支，**这些文件必须先推送到 GitHub 才存在**；本地开发或使用未推送的 tag 时同步必然 404，需要临时把基址换成可访问的镜像。`presets.base_url` / `presets.timeout` 与轮询参数一样保存后需**重启进程**生效。
 - 远程预设的 SSRF 防护按「网络属性」判定而非域名白名单（管理员要能换任意镜像）：会拒绝私网 / 环回 / 链路本地 / 云元数据 IP，但对**代理侧发生的 DNS rebinding** 无能为力；自建代理或镜像时请自行保证上游可信。
-- 一次同步用 `SetMaxOpenConns(1)` 的单个事务写完整批预设，文件较多时会短暂占用唯一的 SQLite 连接；网络 IO 与文档校验都放在 `Begin()` 之前以缩短占用时间。
+- 一次同步在单个事务里写完整批预设，文件较多时会短暂占住连接（SQLite 只有一条连接，尤其明显）；网络 IO 与文档校验都放在 `Begin()` 之前以缩短占用时间。MySQL 的 DDL 会隐式提交，所以只有首次建表的迁移不走事务，其余写入仍是单事务。
 - 管理员把某条订阅条目的 URL 改成与某个远程预设相同、或远程预设之间出现 URL 冲突时，整批同步返回 409 `preset_conflict` 并**整体回滚**（包括本已成功的条目），需先解决冲突再重试。
 - 远程预设的 `version` 只允许单调前进：上游误把版本调小会被静默跳过（计入 `skipped`），不会把本地回退；管理员删除过的预设会留下墓碑，同步永不复活，也没有页面入口清除墓碑（需要时直接改 `catalog_preset_state.deleted`）。
 - 预设 JSON 与「导入」使用的 `feedwatch-catalog` v1 是两种格式，下载下来的分类文件不能直接丢进导入框；需要离线兜底时请按导入格式整理，或把 `presets.base_url` 指向可访问的镜像。
