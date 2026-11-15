@@ -14,6 +14,32 @@ const meta = ref<CatalogMeta | null>(null)
 const busy = ref(false)
 const uncategorized = computed(() => meta.value?.uncategorized_label ?? '未分类')
 
+// Filtering and sorting stay in the browser: one request already returns the
+// whole catalog, so a second round-trip per keystroke would buy nothing.
+// The default is ID ascending — the backend orders by name, which made the ID
+// column look random even though the rows were stable.
+const categoryFilter = ref('all')
+const sortBy = ref<'id' | 'subscriber_count'>('id')
+const sortDesc = ref(false)
+
+const visibleEntries = computed(() => {
+  let rows = entries.value
+  if (categoryFilter.value === 'none') {
+    rows = rows.filter(row => row.category_id === null)
+  } else if (categoryFilter.value !== 'all') {
+    rows = rows.filter(row => String(row.category_id) === categoryFilter.value)
+  }
+  // Array.sort puts a before b for a negative result, so descending needs -1.
+  const dir = sortDesc.value ? -1 : 1
+  return [...rows].sort((a, b) => {
+    // Ties fall back to ID ascending so equal counts keep a stable order.
+    if (sortBy.value === 'subscriber_count') {
+      return dir * (a.subscriber_count - b.subscriber_count) || a.id - b.id
+    }
+    return dir * (a.id - b.id)
+  })
+})
+
 async function load(): Promise<void> {
   clearError()
   try {
@@ -159,13 +185,30 @@ async function acceptRemote(row: CatalogEntry): Promise<void> {
   </div>
 
   <div class="card">
-    <h2>订阅条目（{{ entries.length }}）</h2>
+    <h2>订阅条目（{{ visibleEntries.length }}<span v-if="visibleEntries.length !== entries.length" class="muted"> / 共 {{ entries.length }}</span>）</h2>
     <p class="card-sub">停用只是从订阅中心隐藏，仍占用该 URL；删除才会释放 URL。「预设状态」里的 vN 是本地已应用的预设版本，<strong>不代表远程已有新版本</strong>；「未锁定」表示没手动改过、允许被更高版本覆盖，「已保护」表示你改过、同步会跳过，可点「解除保护」恢复。</p>
+    <div class="catalog-toolbar">
+      <label class="toolbar-field-narrow">分类
+        <select v-model="categoryFilter">
+          <option value="all">全部分类</option>
+          <option v-for="c in categories" :key="c.id" :value="c.id === 0 ? 'none' : String(c.id)">
+            {{ c.name }}（{{ c.entry_count }}）
+          </option>
+        </select>
+      </label>
+      <label class="toolbar-field-narrow">排序
+        <select v-model="sortBy">
+          <option value="id">ID</option>
+          <option value="subscriber_count">订阅人数</option>
+        </select>
+      </label>
+      <button class="ghost" type="button" @click="sortDesc = !sortDesc">{{ sortDesc ? '降序 ↓' : '升序 ↑' }}</button>
+    </div>
     <div class="table-wrap">
       <table>
         <thead><tr><th>ID</th><th>名称</th><th>分类</th><th>链接</th><th>订阅人数</th><th>状态</th><th>预设状态</th><th>更新时间</th><th>操作</th></tr></thead>
         <tbody>
-          <template v-for="row in entries" :key="row.id">
+          <template v-for="row in visibleEntries" :key="row.id">
             <tr>
               <td class="mono">{{ row.id }}</td>
               <td>{{ row.name }}</td>
@@ -215,7 +258,10 @@ async function acceptRemote(row: CatalogEntry): Promise<void> {
               </td>
             </tr>
           </template>
-          <tr v-if="!entries.length"><td colspan="9" class="empty">订阅目录还是空的，可在上方手动添加，或在「导入导出」页载入备份、在「远程预设」页拉取预设。</td></tr>
+          <tr v-if="!visibleEntries.length"><td colspan="9" class="empty">
+            <template v-if="entries.length">该分类下没有订阅条目，换个分类或选「全部分类」。</template>
+            <template v-else>订阅目录还是空的，可在上方手动添加，或在「导入导出」页载入备份、在「远程预设」页拉取预设。</template>
+          </td></tr>
         </tbody>
       </table>
     </div>
