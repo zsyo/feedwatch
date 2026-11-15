@@ -6,6 +6,7 @@ import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
 import { copyText, kindLabel, statusBadge, statusLabel } from '../catalog'
 import type { CatalogCategory, CatalogEntry, CatalogMeta, CatalogSubmission } from '../catalog'
+import type { PresetSyncResult } from '../presets'
 
 interface AdminCatalogResponse {
   entries: CatalogEntry[]
@@ -339,6 +340,42 @@ async function importCatalog(): Promise<void> {
     busy.value = false
   }
 }
+
+// ---- remote presets ----
+const syncing = ref(false)
+const syncResult = ref<PresetSyncResult | null>(null)
+
+async function syncRemote(): Promise<void> {
+  err.value = ''
+  success.value = ''
+  syncResult.value = null
+  syncing.value = true
+  try {
+    const out = await api.post<PresetSyncResult>('/api/admin/catalog/presets/sync', {})
+    syncResult.value = out
+    success.value = `远程预设同步完成：新增 ${out.created}、更新 ${out.updated}、跳过 ${out.skipped}、受保护 ${out.protected}、认领 ${out.adopted}。`
+    await load()
+  } catch (e) {
+    err.value = errorMessage(e)
+  } finally {
+    syncing.value = false
+  }
+}
+
+async function acceptRemote(row: CatalogEntry): Promise<void> {
+  if (!window.confirm(
+    `「${row.name}」被标记为本地已编辑，远程同步不会覆盖它。解除保护后，下次同步会用更高版本覆盖你的修改。继续？`,
+  )) return
+  err.value = ''
+  success.value = ''
+  try {
+    await api.post(`/api/admin/catalog/${row.id}/accept-remote`, {})
+    success.value = '已解除保护，下次「获取远程预设数据」会应用更新的版本。'
+    await load()
+  } catch (e) {
+    err.value = errorMessage(e)
+  }
+}
 </script>
 
 <template>
@@ -453,7 +490,7 @@ async function importCatalog(): Promise<void> {
     <p class="card-sub">停用只是从订阅中心隐藏，仍占用该 URL；删除才会释放 URL。两者都不会改动用户已经复制过去的订阅。</p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>名称</th><th>分类</th><th>链接</th><th>订阅人数</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>ID</th><th>名称</th><th>分类</th><th>链接</th><th>订阅人数</th><th>状态</th><th>预设状态</th><th>更新时间</th><th>操作</th></tr></thead>
         <tbody>
           <template v-for="row in entries" :key="row.id">
             <tr>
@@ -463,17 +500,26 @@ async function importCatalog(): Promise<void> {
               <td class="mono cell-url">{{ row.url }}</td>
               <td>{{ row.subscriber_count }}</td>
               <td><span class="badge" :class="row.enabled ? 'badge-on' : 'badge-off'">{{ row.enabled ? '启用' : '停用' }}</span></td>
+              <td>
+                <span v-if="!row.preset_key" class="muted">手动</span>
+                <span v-else class="preset-state">
+                  <span class="mono">v{{ row.preset_version }}</span>
+                  <span v-if="row.preset_edited" class="badge badge-warn">已保护</span>
+                  <span v-else class="badge badge-on">可更新</span>
+                </span>
+              </td>
               <td class="mono">{{ formatTime(row.updated_at) }}</td>
               <td>
                 <div class="cell-actions">
                   <button class="small" type="button" @click="startEdit(row)">{{ editing === row.id ? '收起' : '编辑' }}</button>
                   <button class="small" type="button" @click="toggleEnabled(row)">{{ row.enabled ? '停用' : '启用' }}</button>
                   <button class="small" type="button" @click="removeEntry(row)">删除</button>
+                  <button v-if="row.preset_key && row.preset_edited" class="small" type="button" @click="acceptRemote(row)">接受远程更新</button>
                 </div>
               </td>
             </tr>
             <tr v-if="editing === row.id">
-              <td colspan="8" class="catalog-detail-cell">
+              <td colspan="9" class="catalog-detail-cell">
                 <form class="catalog-edit" @submit.prevent="saveEdit(row)">
                   <div class="form-row">
                     <label>名称<input v-model="editDraft.name" required :maxlength="meta?.max_name_len" /></label>
@@ -496,7 +542,7 @@ async function importCatalog(): Promise<void> {
               </td>
             </tr>
           </template>
-          <tr v-if="!entries.length"><td colspan="8" class="empty">目录还是空的，可在上方手动添加，或在下方导入。</td></tr>
+          <tr v-if="!entries.length"><td colspan="9" class="empty">目录还是空的，可在上方手动添加，或在下方导入。</td></tr>
         </tbody>
       </table>
     </div>
@@ -533,9 +579,9 @@ async function importCatalog(): Promise<void> {
   </div>
 
   <div class="card">
-    <h2>导入与导出</h2>
-    <p class="card-sub">导出只含目录元数据（分类按名称匹配），不含 id、用户订阅、渠道密钥或投递状态；导入只写目录表，不会给任何用户创建订阅。</p>
-    <div class="grid-2">
+    <h2>导入、导出与远程预设</h2>
+    <p class="card-sub">导出只含目录元数据（分类按名称匹配），不含 id、用户订阅、渠道密钥或投递状态；导入与远程预设都只写目录表，不会给任何用户创建订阅。</p>
+    <div class="grid-3">
       <div>
         <h3 class="section-title">导出</h3>
         <p class="card-sub">把当前目录保存成 JSON，可用于备份、迁移或在老库里载入内置示例。</p>
@@ -560,6 +606,35 @@ async function importCatalog(): Promise<void> {
           <span v-if="importFile" class="hint">{{ importFile.name }}</span>
         </div>
         <p v-if="importResult" class="hint">导入结果：{{ importResult }}</p>
+      </div>
+      <div>
+        <h3 class="section-title">远程预设</h3>
+        <p class="card-sub">从「全局设置」的地址拉取 manifest 与分类 JSON。只应用版本更高的条目；你手动编辑过的会标为「已保护」并保留。</p>
+        <div class="form-actions">
+          <button class="primary" type="button" :disabled="busy || syncing" @click="syncRemote">{{ syncing ? '同步中…' : '获取远程预设数据' }}</button>
+        </div>
+        <p class="hint">地址可在「全局设置 → presets.base_url」改成镜像；拉取失败时也可在左侧「导入」手动上传同一份 JSON。设置改动需重启进程生效。</p>
+        <div v-if="syncResult" class="preset-summary">
+          <p class="hint">新增 {{ syncResult.created }}、更新 {{ syncResult.updated }}、跳过 {{ syncResult.skipped }}、受保护 {{ syncResult.protected }}、认领 {{ syncResult.adopted }}。</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>文件</th><th>状态</th><th>新增</th><th>更新</th><th>跳过</th><th>保护</th></tr></thead>
+              <tbody>
+                <tr v-for="f in syncResult.files" :key="f.name">
+                  <td class="mono">{{ f.name }}</td>
+                  <td>
+                    <span class="badge" :class="f.status === 'ok' ? 'badge-on' : 'badge-danger'">{{ f.status === 'ok' ? '成功' : '失败' }}</span>
+                    <span v-if="f.reason" class="hint preset-reason" :title="f.reason">{{ f.reason }}</span>
+                  </td>
+                  <td>{{ f.created }}</td>
+                  <td>{{ f.updated }}</td>
+                  <td>{{ f.skipped }}</td>
+                  <td>{{ f.protected }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   </div>

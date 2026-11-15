@@ -75,7 +75,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .card > h2 { margin: 0 0 .25rem; font-size: 1.02rem; }
 .card-sub { margin: 0 0 1rem; color: var(--muted); font-size: .84rem; }
 .stack { display: grid; gap: 1.1rem; }
-.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+.grid-2, .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .8rem; }
 .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem; }
 .stat .label { display: block; color: var(--muted); font-size: .78rem; }
@@ -270,6 +270,17 @@ button.small.is-active { background: var(--accent); border-color: var(--accent);
   font-size: .78rem !important; padding: .3rem .45rem !important;
 }
 .category-name { min-width: 160px; margin-top: 0 !important; }
+
+/* Remote preset sync: status pills in the entry table and the per-file result. */
+.preset-state { display: inline-flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+.preset-summary { margin-top: .8rem; }
+.preset-summary .table-wrap { margin-top: .5rem; }
+.preset-summary table { font-size: .78rem; }
+.preset-summary th, .preset-summary td { padding: .35rem .45rem; }
+.preset-reason {
+  display: block; max-width: 220px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; margin-top: .2rem;
+}
 
 @media (max-width: 800px) {
   .layout { grid-template-columns: 1fr; }

@@ -26,6 +26,9 @@ export interface CatalogEntry {
   subscription_id: number | null
   created_at: string
   updated_at: string
+  preset_key: string
+  preset_version: number
+  preset_edited: boolean
 }
 
 export interface CatalogSnapshot {
