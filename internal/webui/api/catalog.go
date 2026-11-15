@@ -39,6 +39,9 @@ type catalogEntry struct {
 	SubscriptionID  *int64 `json:"subscription_id"`
 	CreatedAt       string `json:"created_at"`
 	UpdatedAt       string `json:"updated_at"`
+	PresetKey       string `json:"preset_key"`
+	PresetVersion   int    `json:"preset_version"`
+	PresetEdited    bool   `json:"preset_edited"`
 }
 
 // catalogSnapshot is what an "update" proposal stores in before_json: the
@@ -202,7 +205,7 @@ func (s *Server) loadCatalogEntries(userID int64, includeDisabled bool) ([]catal
 		(SELECT s.id FROM subscriptions s
 		   WHERE s.user_id=? AND s.url_key=e.url_key AND s.deleted_at IS NULL
 		   ORDER BY s.id LIMIT 1),
-		e.created_at, e.updated_at
+		e.created_at, e.updated_at, e.preset_key, e.preset_version, e.preset_edited
 		FROM catalog_entries e
 		LEFT JOIN catalog_categories c ON c.id=e.category_id`
 	if !includeDisabled {
@@ -216,12 +219,13 @@ func (s *Server) loadCatalogEntries(userID int64, includeDisabled bool) ([]catal
 	out := make([]catalogEntry, 0)
 	for rows.Next() {
 		var item catalogEntry
-		var enabled int
+		var enabled, presetEdited int
 		var categoryID, subscriptionID sql.NullInt64
 		var categoryName string
 		if err := rows.Scan(&item.ID, &item.Name, &item.URL, &item.URLKey, &categoryID,
 			&categoryName, &item.Description, &item.Homepage, &item.SourceType, &enabled,
-			&item.SubscriberCount, &subscriptionID, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			&item.SubscriberCount, &subscriptionID, &item.CreatedAt, &item.UpdatedAt,
+			&item.PresetKey, &item.PresetVersion, &presetEdited); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -231,6 +235,7 @@ func (s *Server) loadCatalogEntries(userID int64, includeDisabled bool) ([]catal
 			item.CategoryName = uncategorizedLabel
 		}
 		item.Enabled = enabled != 0
+		item.PresetEdited = presetEdited != 0
 		item.SubscriptionID = nullableID(subscriptionID)
 		item.Subscribed = item.SubscriptionID != nil
 		// Defense in depth: catalog URLs are validated at write time, but a

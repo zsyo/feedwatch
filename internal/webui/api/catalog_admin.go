@@ -5,6 +5,7 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -275,7 +276,9 @@ func (s *Server) adminUpdateEntry(w http.ResponseWriter, r *http.Request, _ Ctx)
 		fail(w, http.StatusBadRequest, "empty_patch", "no fields to update")
 		return
 	}
-	sets = append(sets, "updated_at=?")
+	// Any manual edit marks the row as locally maintained, so a later remote
+	// preset sync leaves it alone until an admin explicitly accepts updates.
+	sets = append(sets, "preset_edited=1", "updated_at=?")
 	args = append(args, store.Now(), id)
 	res, err := tx.Exec(`UPDATE catalog_entries SET `+strings.Join(sets, ", ")+` WHERE id=?`, args...)
 	if err != nil {
@@ -295,19 +298,55 @@ func (s *Server) adminUpdateEntry(w http.ResponseWriter, r *http.Request, _ Ctx)
 }
 
 // adminDeleteEntry physically removes a template, releasing its URL. Rows
-// already copied into users' subscriptions are untouched.
+// already copied into users' subscriptions are untouched. A row that came
+// from a remote preset leaves a tombstone behind, otherwise the next sync
+// would see it as "missing" and silently resurrect the admin's deletion.
 func (s *Server) adminDeleteEntry(w http.ResponseWriter, r *http.Request, _ Ctx) {
 	id, err := parseID(r, "id")
 	if err != nil {
 		fail(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	res, err := s.db.Exec(`DELETE FROM catalog_entries WHERE id=?`, id)
+	tx, err := s.db.Begin()
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	requireAffected(w, res, "catalog entry")
+	defer tx.Rollback()
+	var presetKey string
+	err = tx.QueryRow(`SELECT preset_key FROM catalog_entries WHERE id=?`, id).Scan(&presetKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		fail(w, http.StatusNotFound, "not_found", "catalog entry not found")
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	now := store.Now()
+	if presetKey != "" {
+		if _, err := tx.Exec(`INSERT INTO catalog_preset_state (preset_key, last_version, deleted, updated_at)
+			VALUES (?,0,1,?) ON CONFLICT(preset_key) DO UPDATE SET deleted=1, updated_at=excluded.updated_at`,
+			presetKey, now); err != nil {
+			fail(w, http.StatusInternalServerError, "db_error", err.Error())
+			return
+		}
+	}
+	res, err := tx.Exec(`DELETE FROM catalog_entries WHERE id=?`, id)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		fail(w, http.StatusNotFound, "not_found", "catalog entry not found")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		fail(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) adminListSubmissions(w http.ResponseWriter, r *http.Request, _ Ctx) {
@@ -411,7 +450,7 @@ func (s *Server) approveSubmission(w http.ResponseWriter, r *http.Request, c Ctx
 		targetID, _ = res.LastInsertId()
 	} else {
 		if _, err := tx.Exec(`UPDATE catalog_entries SET
-			url=?, url_key=?, name=?, category_id=?, description=?, homepage=?, updated_at=? WHERE id=?`,
+			url=?, url_key=?, name=?, category_id=?, description=?, homepage=?, preset_edited=1, updated_at=? WHERE id=?`,
 			rawURL, urlKey, name, categoryID, description, homepage, now, targetID); err != nil {
 			fail(w, http.StatusInternalServerError, "db_error", err.Error())
 			return

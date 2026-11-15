@@ -104,6 +104,8 @@ func TestCatalogRoleGuard(t *testing.T) {
 		{http.MethodPost, "/api/admin/catalog/categories"},
 		{http.MethodGet, "/api/admin/catalog/export"},
 		{http.MethodPost, "/api/admin/catalog/import"},
+		{http.MethodPost, "/api/admin/catalog/presets/sync"},
+		{http.MethodPost, "/api/admin/catalog/1/accept-remote"},
 	}
 	for _, e := range adminEndpoints {
 		out := alice.do(e.method, e.path, nil, http.StatusForbidden)

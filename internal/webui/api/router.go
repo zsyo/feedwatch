@@ -79,6 +79,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("DELETE /api/admin/catalog/categories/{id}", s.handle(accessAdmin, false, s.deleteCategory))
 	mux.Handle("GET /api/admin/catalog/export", s.handle(accessAdmin, false, s.exportCatalog))
 	mux.Handle("POST /api/admin/catalog/import", s.handle(accessAdmin, false, s.importCatalog))
+	mux.Handle("POST /api/admin/catalog/presets/sync", s.handle(accessAdmin, false, s.syncPresets))
+	mux.Handle("POST /api/admin/catalog/{id}/accept-remote", s.handle(accessAdmin, false, s.acceptRemote))
 
 	// Unknown /api/* paths must be JSON 404s for every method. A single method-
 	// less "/api/" pattern would overlap "GET /" without being a strict subset,
