@@ -23,6 +23,7 @@ interface SettingsResponse {
   docs: Record<string, SettingDoc>
   env_only: string[]
   informational: string[]
+  auth_managed: string[]
   applies: string
   note: string
 }
@@ -98,6 +99,7 @@ async function save(): Promise<void> {
 
 function kindOf(key: string): string {
   if (data.value?.env_only.includes(key)) return '环境变量控制'
+  if (data.value?.auth_managed.includes(key)) return '登录与注册页管理'
   if (data.value?.informational.includes(key)) return '只读参考'
   return '只读'
 }

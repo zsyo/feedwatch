@@ -15,7 +15,8 @@ interface NavItem {
 const route = useRoute()
 const router = useRouter()
 const meta = ref({ version: '', build_id: '' })
-const onLogin = computed(() => route.name === 'login')
+// Login and sign-up share the centred card layout: both are meta.public.
+const onAuthScreen = computed(() => route.meta.public === true)
 
 // Administrators are an operations role: they never see the subscription and
 // channel pages, because they cannot own either. Everyone else gets the
@@ -27,6 +28,7 @@ const adminNav: NavItem[] = [
   { to: '/admin/pool', label: '轮询池' },
   { to: '/admin/ratelimit', label: '限速状态' },
   { to: '/admin/settings', label: '全局设置' },
+  { to: '/admin/auth', label: '登录与注册' },
   { to: '/admin/audit', label: '审计日志' },
   { to: '/settings', label: '账号设置' },
 ]
@@ -72,7 +74,7 @@ async function signOut(): Promise<void> {
 <template>
   <div v-if="!ready" class="boot">正在加载 FeedWatch…</div>
 
-  <div v-else-if="onLogin" class="auth-screen">
+  <div v-else-if="onAuthScreen" class="auth-screen">
     <RouterView />
   </div>
 

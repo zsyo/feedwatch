@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { bootstrap, isAdmin, mustChangePassword, ready, user } from './session'
 
 import LoginView from './views/LoginView.vue'
+import RegisterView from './views/RegisterView.vue'
 import PasswordView from './views/PasswordView.vue'
 import DashboardView from './views/DashboardView.vue'
 import SubscriptionsView from './views/SubscriptionsView.vue'
@@ -12,6 +13,7 @@ import AdminUserDetailView from './views/AdminUserDetailView.vue'
 import AdminPoolView from './views/AdminPoolView.vue'
 import AdminRateLimitView from './views/AdminRateLimitView.vue'
 import AdminSettingsView from './views/AdminSettingsView.vue'
+import AdminAuthView from './views/AdminAuthView.vue'
 import AdminAuditView from './views/AdminAuditView.vue'
 import CatalogView from './views/CatalogView.vue'
 import CatalogPendingView from './views/CatalogPendingView.vue'
@@ -37,6 +39,9 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
+    // Public so a signed-out visitor can sign up; the server refuses when
+    // webui.allow_registration is off and the view says so.
+    { path: '/register', name: 'register', component: RegisterView, meta: { public: true } },
     { path: '/', name: 'dashboard', component: DashboardView },
     { path: '/password', name: 'password', component: PasswordView },
     { path: '/subscriptions', name: 'subscriptions', component: SubscriptionsView, meta: { member: true } },
@@ -60,6 +65,7 @@ const router = createRouter({
     { path: '/admin/pool', name: 'admin-pool', component: AdminPoolView, meta: { admin: true } },
     { path: '/admin/ratelimit', name: 'admin-ratelimit', component: AdminRateLimitView, meta: { admin: true } },
     { path: '/admin/settings', name: 'admin-settings', component: AdminSettingsView, meta: { admin: true } },
+    { path: '/admin/auth', name: 'admin-auth', component: AdminAuthView, meta: { admin: true } },
     { path: '/admin/audit', name: 'admin-audit', component: AdminAuditView, meta: { admin: true } },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
@@ -67,7 +73,8 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   if (!ready.value) await bootstrap()
-  if (to.name === 'login') return true
+  // Both public pages must stay reachable while signed out.
+  if (to.meta.public) return true
   if (!user.value) return { name: 'login', query: { redirect: to.fullPath } }
   // The server also blocks all other /api/* calls until the initial password
   // is changed; mirroring that in the router avoids a wall of 403s in the UI.

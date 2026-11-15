@@ -74,6 +74,31 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 }
 .login-card h1 { margin: 0 0 .3rem; font-size: 1.5rem; }
 .login-card > p { margin: 0 0 1.5rem; color: var(--muted); font-size: .9rem; }
+/* The sign-in card carries three blocks (password form, providers, footer) with
+   a rule between them; .login-card > p above must not flatten the spacing of
+   the later ones, hence the explicit overrides. */
+.login-card .auth-divider {
+  display: flex; align-items: center; gap: .7rem; margin: 1.1rem 0 .9rem;
+  color: var(--muted); font-size: .78rem;
+}
+.login-card .auth-divider::before,
+.login-card .auth-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.login-card .auth-divider span { white-space: nowrap; }
+.login-card .auth-switch { margin: 1.1rem 0 0; font-size: .84rem; color: var(--muted); }
+/* The footer hint follows the sign-up link directly; without extra space the
+   two read as one paragraph. */
+.login-card .auth-switch + .hint { margin-top: .9rem; }
+/* One full-width primary action per card: the password form and the provider
+   buttons below it share the same edges. */
+.login-card form button.primary { width: 100%; }
+.oauth-buttons { display: grid; gap: .5rem; }
+/* A full-width secondary action: same shape as button.ghost, but an <a> because
+   it is a navigation that leaves the SPA. */
+.oauth-btn {
+  display: block; text-align: center; padding: .52rem .9rem; font-size: .86rem;
+  border: 1px solid var(--border); border-radius: 7px; background: #fff; color: #344054;
+}
+.oauth-btn:hover { background: #f2f4f7; }
 
 /* ---------- page furniture ---------- */
 .page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; margin-bottom: 1.3rem; }
@@ -112,6 +137,9 @@ textarea { min-height: 76px; resize: vertical; font-family: ui-monospace, SFMono
 .form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0 .9rem; }
 .form-actions { display: flex; gap: .55rem; align-items: center; flex-wrap: wrap; margin-top: .3rem; }
 .inline-check { display: flex; align-items: center; gap: .4rem; font-size: .84rem; margin: 0; }
+/* A checkbox directly above a two-column field row needs breathing room,
+   otherwise its label touches the field labels. */
+.inline-check + .form-row { margin-top: .9rem; }
 .inline-check input { width: auto; margin: 0; }
 /* Two labels side by side for an account-wide either/or choice. */
 .choice-row { display: flex; flex-wrap: wrap; gap: .45rem 1.8rem; margin: .1rem 0 .2rem; }
@@ -127,6 +155,21 @@ button.danger { background: #fff; border-color: #fecdca; color: var(--danger); }
 button.danger:hover:not(:disabled) { background: #fef3f2; }
 button.small { padding: .3rem .6rem; font-size: .78rem; background: #fff; border-color: var(--border); color: #344054; }
 button.small:hover:not(:disabled) { background: #f2f4f7; }
+
+/* ---------- linked accounts (account settings) ---------- */
+.provider-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .75rem 0; border-top: 1px solid var(--border);
+}
+.provider-row:first-of-type { border-top: none; }
+.provider-name { font-weight: 600; font-size: .9rem; }
+.provider-meta { color: var(--muted); font-size: .8rem; margin-top: .2rem; word-break: break-all; }
+.provider-actions { display: flex; gap: .5rem; align-items: center; flex-shrink: 0; }
+.provider-actions .link-button { padding: .3rem .7rem; font-size: .8rem; }
+/* A read-only input plus its copy button on one line. */
+.copy-line { display: flex; gap: .4rem; align-items: center; margin-top: .35rem; }
+.copy-line input { margin-top: 0; }
+.copy-line button { white-space: nowrap; }
 
 /* ---------- tables ---------- */
 .table-wrap { overflow-x: auto; }

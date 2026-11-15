@@ -11,6 +11,8 @@ export interface User {
   timezone: string
   /** How a cycle's new releases are grouped: one digest, or one per project. */
   notify_mode: NotifyMode
+  /** False for an account created by a third-party sign-in that never set one. */
+  password_set: boolean
 }
 
 /** digest = 汇总一条，per_feed = 每个项目一条。 */
@@ -65,6 +67,12 @@ export async function bootstrap(): Promise<void> {
 
 export async function login(username: string, password: string): Promise<void> {
   apply(await api.post<MeResponse>('/api/auth/login', { username, password }))
+}
+
+// register signs the new account in on the server: the response carries the
+// session cookie and the CSRF token, exactly like a login.
+export async function register(username: string, password: string): Promise<void> {
+  apply(await api.post<MeResponse>('/api/auth/register', { username, password }))
 }
 
 export async function logout(): Promise<void> {
