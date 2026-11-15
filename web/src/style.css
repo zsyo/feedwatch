@@ -42,6 +42,17 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .nav-item:hover { background: #1d2939; color: #fff; }
 .nav-item.router-link-exact-active,
 .nav-item.nav-item--active { background: var(--accent); color: #fff; font-weight: 600; }
+/* Contextual group: the parent is a label once unfolded (its children carry
+   the active state), the caret shows the group is open, and the left rule
+   keeps the second level readable without adding another background tier. */
+.nav-group-parent { color: #fff; font-weight: 600; }
+.nav-caret { float: right; font-size: .72rem; opacity: .7; }
+.nav-subitem {
+  margin-left: .55rem; padding-left: .8rem; font-size: .84rem;
+  border-left: 2px solid #344054;
+}
+.nav-subitem:hover { border-left-color: #98a2b3; }
+.nav-subitem.router-link-exact-active { border-left-color: #fff; }
 .sidebar-foot { font-size: .72rem; color: #7d8ba1; padding: 0 .6rem; }
 
 .main { min-width: 0; display: flex; flex-direction: column; }
@@ -287,6 +298,7 @@ button.small.is-active { background: var(--accent); border-color: var(--accent);
   .sidebar { position: static; height: auto; flex-direction: row; align-items: center; flex-wrap: wrap; gap: .6rem; }
   .sidebar nav { flex-direction: row; flex-wrap: wrap; }
   .nav-label, .sidebar-foot { display: none; }
+  .nav-subitem { margin-left: 0; padding-left: .6rem; }
   .brand { border: none; padding: 0; }
   .content { padding: 1rem; }
   .topbar { padding: 0 1rem; }

@@ -3,6 +3,14 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { api } from './api'
 import { isAdmin, logout, ready, user } from './session'
+import { catalogAdminPages, catalogAdminPrefix } from './catalogAdmin'
+import type { CatalogAdminPage } from './catalogAdmin'
+
+interface NavItem {
+  to: string
+  label: string
+  children?: CatalogAdminPage[]
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -12,17 +20,17 @@ const onLogin = computed(() => route.name === 'login')
 // Administrators are an operations role: they never see the subscription and
 // channel pages, because they cannot own either. Everyone else gets the
 // subscriber workspace plus their account settings.
-const adminNav = [
+const adminNav: NavItem[] = [
   { to: '/', label: '概览' },
   { to: '/admin/users', label: '用户管理' },
-  { to: '/admin/catalog', label: '目录管理' },
+  { to: '/admin/catalog', label: '目录管理', children: catalogAdminPages },
   { to: '/admin/pool', label: '轮询池' },
   { to: '/admin/ratelimit', label: '限速状态' },
   { to: '/admin/settings', label: '全局设置' },
   { to: '/admin/audit', label: '审计日志' },
   { to: '/settings', label: '账号设置' },
 ]
-const memberNav = [
+const memberNav: NavItem[] = [
   { to: '/', label: '概览' },
   { to: '/catalog', label: '订阅中心' },
   { to: '/subscriptions', label: '我的订阅' },
@@ -31,6 +39,12 @@ const memberNav = [
 ]
 const navItems = computed(() => (isAdmin.value ? adminNav : memberNav))
 const navLabel = computed(() => (isAdmin.value ? '管理' : '工作台'))
+
+// The catalog submenu is contextual: it unfolds only while the user is in the
+// catalog group, so the other admin pages keep the short eight-item sidebar.
+// The group parent links to /admin/catalog (the group entry), never to one of
+// its children, so Vue Router cannot mark both parent and child as exact-active.
+const inCatalogGroup = computed(() => isAdmin.value && route.path.startsWith(catalogAdminPrefix))
 
 // /catalog/pending is a sibling route, not a child of /catalog, and it no
 // longer has its own sidebar item. Keep the catalog item highlighted there
@@ -74,10 +88,19 @@ async function signOut(): Promise<void> {
 
       <nav>
         <p class="nav-label">{{ navLabel }}</p>
-        <RouterLink v-for="item in navItems" :key="item.to" :to="item.to" class="nav-item"
-          :class="{ 'nav-item--active': navActive(item.to) }">
-          {{ item.label }}
-        </RouterLink>
+        <template v-for="item in navItems" :key="item.to">
+          <RouterLink :to="item.to" class="nav-item"
+            :class="{ 'nav-item--active': navActive(item.to), 'nav-group-parent': item.children && inCatalogGroup }">
+            {{ item.label }}
+            <span v-if="item.children && inCatalogGroup" class="nav-caret" aria-hidden="true">▾</span>
+          </RouterLink>
+          <template v-if="item.children && inCatalogGroup">
+            <RouterLink v-for="sub in item.children" :key="sub.to" :to="sub.to"
+              class="nav-item nav-subitem">
+              {{ sub.label }}
+            </RouterLink>
+          </template>
+        </template>
       </nav>
 
       <div class="sidebar-foot">v{{ meta.version || 'dev' }} · {{ meta.build_id || 'dev' }}</div>
