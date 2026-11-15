@@ -316,7 +316,7 @@ rootless 还有两点差异：容器绑不了 1024 以下端口（默认 8080 �
 | 镜像 tag | 版本号 / `latest` | 版本号加 `-webui`（如 `1.2.3-webui`），移动指针是 `webui` |
 | 配置来源 | 每次启动读 `config.yaml` | **不读 `config.yaml`**：空库启动，订阅 / 通知方式 / 密钥全部在页面里配 |
 | 界面 / 接口 | 无 | Vue 3 SPA + `/api/*`，默认监听 `:8080` |
-| 状态 | `data/state.json`（JSON 原子写） | 关系库（默认 SQLite WAL `/app/data/feedwatch.db` 及 `-wal` / `-shm`，也可换 MySQL / PostgreSQL）+ `secret.key`；库内含订阅目录（`catalog_entries`）、审核提交（`submissions`）与远程预设状态（`catalog_preset_state`）表（schema v7） |
+| 状态 | `data/state.json`（JSON 原子写） | 关系库（默认 SQLite WAL `/app/data/feedwatch.db` 及 `-wal` / `-shm`，也可换 MySQL / PostgreSQL）+ `secret.key`；库内含订阅目录（`catalog_entries`）、审核提交（`submissions`）、远程预设状态（`catalog_preset_state`）与三方登录绑定（`user_identities` / `auth_providers`）表（schema v8） |
 | 用户 | 单用户（配置即全部订阅） | 多用户 + 管理员，订阅与渠道按用户隔离 |
 | 密钥来源 | 环境变量（`${ENV_VAR}` 展开） | 页面填写，AES-256-GCM 加密后存库，不可回读 |
 
@@ -330,7 +330,7 @@ docker compose -f docker-compose.webui.yml up -d --build
 docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里打印一次
 ```
 
-**不需要 `config.yaml`，也不需要任何渠道密钥变量**：容器首启就是一个干净的空库，只有 `users` 表里那条 `admin` 记录、一套默认设置，以及 8 条示例订阅目录（GitHub 仓库的 `releases.atom`）和 3 个分类。示例只是可浏览的模板，**不会给任何人创建订阅**；老库升级不会自动获得，可在「订阅管理 → 导入导出」加载。浏览器打开 `http://<宿主机>:8080`（端口由 `.env` 的 `WEBUI_HTTP_PORT` 控制），用日志里的 `admin` 密码登录，**首次登录会被强制改密**；改密后所有旧会话立即失效。管理员可在「用户管理」里新建账号或重置密码（新密码只在页面上显示一次）。
+**不需要 `config.yaml`，也不需要任何渠道密钥变量**：容器首启就是一个干净的空库，只有 `users` 表里那条 `admin` 记录、一套默认设置，以及 8 条示例订阅目录（GitHub 仓库的 `releases.atom`）和 3 个分类。示例只是可浏览的模板，**不会给任何人创建订阅**；老库升级不会自动获得，可在「订阅管理 → 导入导出」加载。浏览器打开 `http://<宿主机>:8080`（端口由 `.env` 的 `WEBUI_HTTP_PORT` 控制），用日志里的 `admin` 密码登录，**首次登录会被强制改密**；改密后所有旧会话立即失效。管理员可在「用户管理」里新建账号或重置密码（新密码只在页面上显示一次）；**自助注册默认关闭**，要开放就在「登录与注册」页打开（见下一节）。
 
 若经 HTTPS 反向代理访问，把 `.env` 的 `FEEDWATCH_WEBUI_COOKIE_SECURE` 设为 `true`；纯 HTTP 直连时务必保持 `false`，否则会话 cookie 带 `Secure` 标志、浏览器不会回传，导致无法登录。会话有效期由 `FEEDWATCH_WEBUI_SESSION_TTL` 控制（默认 `168h`）。
 
@@ -381,10 +381,31 @@ FEEDWATCH_DATA_DIR=/var/lib/feedwatch \
 | 他人数据 | 只读下钻：订阅、渠道、投递记录 | 无 |
 | 他人资源启停 | 可停用 / 恢复某个订阅或渠道，**不能改内容** | 无 |
 | 用户管理 | 新建用户、重置密码、停用账号 | 只能改自己的密码 |
+| 自助注册 / 三方登录 | 只能用密码登录；无绑定入口（403 `role_not_allowed`） | 可自助注册、用 GitHub / linux.do 登录并绑定 |
+| 登录与注册配置 | 「登录与注册」页：注册开关 + 两个平台的 Client ID / Secret | 看不到 |
 
 **想给自己配订阅，就新建一个普通用户**：管理员刻意被挡在业务配置之外，运维账号与订阅账号不会混在一起，管理员也无法借权限读到别人的 webhook / token。下钻页面的写操作只接受 `{"enabled": bool}`，多传一个字段即 400 `admin_readonly`。
 
 订阅中心的「更新信息要审核」只针对**普通用户**：管理员是可信角色，在「订阅管理 → 订阅条目」里添加或编辑条目立即生效、不产生待审申请；用户提交的新增 / 更新申请则必须由管理员在「审核队列」子页通过或驳回后才写入目录。「审核中」页对全体普通用户开放，但**只能查看和手动复制**，不能直接订阅。
+
+### 注册与第三方登录
+
+两条入口，都默认关闭，由管理员在「登录与注册」页打开：
+
+| 入口 | 打开后的行为 |
+| --- | --- |
+| 自助注册 | 登录页出现「注册一个」；访客自填用户名 + 密码（≥8 位）即建普通账号并**直接登录**，不经过管理员审批 |
+| GitHub / linux.do 登录 | 登录页出现「使用 X 登录」。首次用某个第三方账号登录时**自动建号并绑定**，之后再点就是登录；已登录的用户在「账号设置 → 第三方登录」里可以绑定或解绑 |
+
+- **关闭自助注册会同时关掉第三方自动建号**：两个入口都会写 `users`，共用 `webui.allow_registration` 一个开关。关闭后，第三方账号若从未绑定过本站账号，会回到登录页并提示「未开放自助注册」。
+- **凭据存库、加密封存**：`auth_providers` 一行一个平台，`client_secret` 用主密钥做 `fwsec:v1:` 信封（AAD 绑定平台名），任何接口都不回显，保存后只显示「已保存，留空表示不修改」。换主密钥只会让这两个 Secret 失效，重新填一次即可，不影响已绑定的用户。
+- **回调地址由请求推导，必须与平台后台登记的一致**：`{当前访问地址}/api/auth/oauth/{github|linuxdo}/callback`，管理页直接显示并可一键复制。经反向代理时要求代理传递 `X-Forwarded-Proto` 与 `X-Forwarded-Host`，否则会算成 `http://` 或内网地址。GitHub 走 OAuth App（`Settings → Developer settings → OAuth Apps`），scope 只要 `read:user user:email`；linux.do 在 `connect.linux.do` 的「我的应用接入」申请，scope 是 `user`。
+- **PKCE 只在支持它的平台上用**：GitHub 发 `code_challenge`（S256）与 `code_verifier`；linux.do Connect 的文档没有 PKCE，因此只用 `state` 防伪。
+- **`state` 是库里的行**（`oauth_flows`，只存 sha256），一次性、10 分钟过期、回调时先删后校验，重放直接失败；「绑定」流程的目标用户在**发起时**就写进这一行，回调 URL 里没有任何用户标识，改参数不能把别人的第三方账号绑到自己身上。
+- **管理员账号完全不参与**：`GET /api/me/identities` 与绑定入口都是 `accessMember`，管理员拿到 403 `role_not_allowed`；即使库里有指向管理员的绑定，回调也会以 `admin_not_allowed` 拒绝登录。管理员只能用用户名 + 密码。
+- 第三方建号拿不到密码，所以「修改密码」页对它显示「设置登录密码」且**不要求旧密码**（没有可验证的东西，凭据是当前会话）。账号设置里也**不允许解绑最后一个登录方式**：没有密码时解绑唯一的第三方账号会被拒绝（400 `last_login_method`）。
+- 登录名从第三方用户名派生（只保留 `[a-zA-Z0-9._-]`，最多 24 字符，最少 2 个），被占用就依次加 `-2`…`-10`；中文用户名会退化成 `github-user` / `linuxdo-user` 这类可用名。第三方邮箱仅作展示（linux.do 不返回邮箱）。
+- 两个公开写入端点按 IP 限流：登录 10 次/分、注册 10 次/分、OAuth start/callback 20 次/分。
 
 ### 数据、主密钥与备份
 
@@ -484,6 +505,9 @@ WebUI 变体**不接受 `-config`**：传了只会记一条 `-config is ignored;
 | v5 | `catalog_categories` / `catalog_entries` / `submissions`（订阅中心） |
 | v6 | `catalog_preset_state` 表 + `catalog_entries` 的 `preset_key` / `preset_version` / `preset_edited` 三列与偏唯一索引（远程预设） |
 | v7 | 支持 MySQL / PostgreSQL：`settings.key` → `setting_key`、`notifications.text` → `body`（这两个名字在 MySQL 里分别是保留字与类型名），版本号改记在 `schema_migrations` 表 |
+| v8 | 三方登录：`user_identities`（每平台一条绑定）、`auth_providers`（凭据，Secret 加密存）、`oauth_flows`（一次性 state，只存哈希） |
+
+v8 **只新增三张表**，不动 `users`（第三方建号的账号 `password_hash` 存空串，密码登录因此天然失败），老库升级后只是多出三张空表，注册与两个平台都还是关闭状态。
 
 v7 只做两处列改名（SQLite 的 `ALTER TABLE ... RENAME COLUMN`，存量数据原样保留），不改任何业务语义；改名原因是 `key` 在 MySQL 是保留字、`text` 是类型名，留着就必须按方言写不同的引号。
 
@@ -641,13 +665,14 @@ internal/watcher/             base 核心编排：有界并发抓取 → 过滤 
 internal/webui/               WebUI 变体（全部 //go:build webui）：首启只建 admin、渠道字段表、URL 规范化、embed 资源
 internal/webui/catalogspec.go 订阅目录的字段上限、URL 安全校验、内置示例、导入导出结构（Go 侧唯一真源）
 internal/webui/secrets/       主密钥加载与 AES-256-GCM 信封加密（唯一知道密钥的包）
-internal/webui/store/         连接与方言层（SQLite / MySQL / PostgreSQL）、三份 DDL、迁移版本表、WAL 与目录可写性预检（schema v7）
+internal/webui/store/         连接与方言层（SQLite / MySQL / PostgreSQL）、三份 DDL、迁移版本表、WAL 与目录可写性预检（schema v8）
 internal/webui/auth/          bcrypt 密码、session、CSRF
+internal/webui/oauth/         GitHub / linux.do 的授权码流程（authorize URL、换 token、取身份、state 与 PKCE 生成；不碰数据库）
 internal/webui/presets/       远程预设的 JSON 校验、加载器与 SSRF 防护（纯函数 + 网络，不碰数据库）
-internal/webui/api/           HTTP server、中间件链、/api/* 端点与 SPA 静态服务；catalog.go / catalog_admin.go / catalog_presets.go 是订阅中心与远程同步
+internal/webui/api/           HTTP server、中间件链、/api/* 端点与 SPA 静态服务；catalog.go / catalog_admin.go / catalog_presets.go 是订阅中心与远程同步，auth_register.go / auth_oauth.go 是自助注册与三方登录
 internal/webui/orchestrator/  多租户轮询：URL 去重池、每用户策略分流、独立投递与按渠道类型限速
 internal/webui/embedded/      只提交 stub.html / .gitkeep，真实产物由构建生成且 gitignore
-web/                         Vue 3 + Vite + TS 源码；CatalogView / CatalogPendingView、5 个 AdminCatalog* 子页 View、catalogAdmin.ts / presets.ts 与 build.sh / build.ps1
+web/                         Vue 3 + Vite + TS 源码；CatalogView / CatalogPendingView、5 个 AdminCatalog* 子页 View、RegisterView / AdminAuthView、catalogAdmin.ts / presets.ts / authMeta.ts 与 build.sh / build.ps1
 presets/                     远程预设数据：manifest.json + 4 个分类 JSON（运行时远程读取，不进镜像）
 testdata/                     测试用 feed 夹具
 ```
@@ -685,7 +710,9 @@ sh web/build.sh                 # 生成前端资源后才能看到真实页面�
 
 WebUI 专项用例另覆盖：bcrypt / session / CSRF 与 cookie 属性、越权与跨用户数据隔离、URL 去重只抓一次、`always` / `on_update` 分流、每用户独立投递与按渠道类型限速、投递失败重试与放弃、管理端设置校验与审计、静态资源头与未知 `/api/*` 的 JSON 404。密钥链路单独测：信封往返与随机 nonce、密文 / AAD 篡改、未知前缀、长度 31 / 33 拒绝、`LoadOrCreate` 建 0600 文件且**不覆盖**已存在的损坏文件、环境变量优先、坏 base64 不落盘；接口层断言创建的密钥落库为 `fwsec:v1:` 且任何响应里都没有明文、留空编辑保持不变、管理员下钻只读（多传字段即 400）、种子只建 admin 且业务表全 0。两种构建都跑同一套 base 回归，保证 WebUI 改动不污染 base 行为。
 
-订阅中心专项用例：v4→v5 迁移只补三张表且保留用户数据、外键 `ON DELETE SET NULL`、pending 部分唯一索引（驳回 / 撤回后可重提）、示例目录只是模板（不写 `subscriptions` / `feed_pool` / `user_seen`）、目录 URL 的协议 / userinfo / 敏感 query / 长度与别名归一化校验、admin 与 member 的双向角色守卫、**一键订阅复制基线不重放历史**、去重防刷与待审上限、新增与更新两类审核流（含 `before_json` 快照、`entry_gone` / `conflict_url`）、撤回、驳回理由可见、分类删除级联、管理员手动编辑不产生申请、导入导出往返与三种冲突策略。改前端后还要在 `web/` 目录下跑 `npm run typecheck`，并重新执行构建脚本再 `go build -tags webui`。
+订阅中心专项用例：v4→v5 迁移只补三张表且保留用户数据、外键 `ON DELETE SET NULL`、pending 部分唯一索引（驳回 / 撤回后可重提）、示例目录只是模板（不写 `subscriptions` / `feed_pool` / `user_seen`）、目录 URL 的协议 / userinfo / 敏感 query / 长度与别名归一化校验、admin 与 member 的双向角色守卫、**一键订阅复制基线不重放历史**、去重防刷与待审上限、新增与更新两类审核流（含 `before_json` 快照、`entry_gone` / `conflict_url`）、撤回、驳回理由可见、分类删除级联、管理员手动编辑不产生申请、导入导出往返与三种冲突策略。注册与三方登录专项用例：注册开关关闭时 403、打开后建号即登录（`must_change_password=0`、`password_set=true`）、重名 409、弱密码与非法用户名 400；OAuth 全流程用本地假 provider 跑通——未配置时 start 只回 `not_configured`、注册关闭时陌生账号被拒且**不写 users**、打开后建号且二次登录复用同一账号、state 重放被判失效、绑定后可用第三方登录进入同一账号、解绑最后一个登录方式被拒、设置密码后可以解绑、管理员调 `/api/me/identities` 与 `mode=bind` 都是 `admin_not_allowed`；管理端断言 Client Secret 保存后不回显、空值保存不覆盖、清除凭据同时停用、凭据不全时禁止启用。`internal/webui/oauth` 另有 authorize URL 参数（含 PKCE 只在 GitHub 出现）、token 错误分支与三种失败响应、身份缺 id 的用例。
+
+改前端后还要在 `web/` 目录下跑 `npm run typecheck`，并重新执行构建脚本再 `go build -tags webui`。
 
 远程预设专项用例：仓库内 `presets/*.json` 直接用生产校验器验一遍（防止拼错 key / 重复 URL 混入发版数据）、manifest 与分类文件的格式/文件名/分类漂移、跨文件 `preset_key` 与 `url_key` 去重、SSRF 的协议 / 端口 / userinfo / 私网与云元数据 IP / DNS 解析复检 / 重定向逐跳复检 / 跳数上限 / 1 MiB 体积上限 / 上下文取消、加载器的逐文件状态与「失败文件之后不再写」、v5→v6 补列与偏唯一索引；接口层覆盖只升不降、连续多版本升级后 `preset_edited` 仍为 0、同版本重复同步、存量条目区分认领、管理员编辑与审核通过置保护、`accept-remote` 解锁、墓碑不复活、拉取失败与 `preset_invalid_document` 零写入、事务内 `url_key` 冲突时**把先前的更新一并回滚**、缺少 loader 的报错、目录列表暴露三个预设状态字段。全部用 `httptest` 本地服务器，不发真实网络请求。
 
