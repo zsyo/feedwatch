@@ -78,12 +78,17 @@ func VerifyPassword(hash, password string) bool {
 
 // ChangePassword verifies the old password before replacing it. The API layer
 // additionally clears must_change_password on success.
+//
+// An account created by a third-party sign-in has no password at all (empty
+// hash). For those the old password is not checked: there is nothing to
+// verify, and refusing the change would leave the account unable to sign in
+// without the provider forever. Possession of a live session is the proof.
 func (m *Manager) ChangePassword(userID int64, oldPassword, newPassword string) error {
 	var hash string
 	if err := m.db.QueryRow("SELECT password_hash FROM users WHERE id=?", userID).Scan(&hash); err != nil {
 		return fmt.Errorf("auth: load user %d: %w", userID, err)
 	}
-	if !VerifyPassword(hash, oldPassword) {
+	if hash != "" && !VerifyPassword(hash, oldPassword) {
 		return ErrInvalidCredentials
 	}
 	newHash, err := HashPassword(newPassword)

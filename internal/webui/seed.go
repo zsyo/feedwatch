@@ -112,8 +112,12 @@ func seedSettings(tx *store.Tx, now string) error {
 		"http.conditional":      strconv.FormatBool(cfg.HTTP.Conditional),
 		"webui.cookie_secure":   "false",
 		"webui.session_ttl":     "168h",
-		"presets.base_url":      DefaultPresetBaseURL,
-		"presets.timeout":       DefaultPresetTimeout,
+		// Self-registration is off until an administrator turns it on in
+		// 「登录与注册」. A missing row is read as false too, so an upgraded
+		// database behaves the same.
+		"webui.allow_registration": "false",
+		"presets.base_url":         DefaultPresetBaseURL,
+		"presets.timeout":          DefaultPresetTimeout,
 	}
 	for k, v := range settings {
 		if _, err := tx.ExecReplace(`INSERT INTO settings (setting_key, value, updated_at) VALUES (?,?,?)`,

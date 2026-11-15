@@ -15,6 +15,13 @@ func (s *Server) routes() *http.ServeMux {
 
 	// Public
 	mux.Handle("POST /api/auth/login", s.handle(accessAny, true, s.login))
+	// Self-registration is gated by webui.allow_registration, read per request.
+	mux.Handle("POST /api/auth/register", s.handle(accessAny, true, s.register))
+	// Third-party sign-in: start is a browser navigation, callback is the
+	// provider's redirect back. Both must work without a session; mode=bind is
+	// the one variant that requires one, and the handler checks that itself.
+	mux.Handle("GET /api/auth/oauth/{provider}/start", s.handle(accessAny, true, s.oauthStart))
+	mux.Handle("GET /api/auth/oauth/{provider}/callback", s.handle(accessAny, true, s.oauthCallback))
 	mux.Handle("GET /api/meta", s.handle(accessAny, true, s.meta))
 
 	// Authenticated, any role
@@ -24,6 +31,11 @@ func (s *Server) routes() *http.ServeMux {
 	// Display preferences (currently only the timezone) belong to the account,
 	// so both roles may change their own.
 	mux.Handle("PATCH /api/me", s.handle(accessAny, false, s.updatePreferences))
+	// Linked sign-in providers. accessMember on purpose: an administrator
+	// account signs in with its password only, so it gets role_not_allowed
+	// here instead of a page it must not use.
+	mux.Handle("GET /api/me/identities", s.handle(accessMember, false, s.listIdentities))
+	mux.Handle("DELETE /api/me/identities/{provider}", s.handle(accessMember, false, s.unlinkIdentity))
 	mux.Handle("GET /api/channel-fields", s.handle(accessAny, false, s.channelFields))
 
 	// Regular users only
@@ -64,6 +76,10 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("GET /api/admin/audit", s.handle(accessAdmin, false, s.adminAudit))
 	mux.Handle("GET /api/admin/settings", s.handle(accessAdmin, false, s.adminGetSettings))
 	mux.Handle("PUT /api/admin/settings", s.handle(accessAdmin, false, s.adminPutSettings))
+	// Sign-in policy: the registration switch plus one row per provider.
+	mux.Handle("GET /api/admin/auth", s.handle(accessAdmin, false, s.adminGetAuth))
+	mux.Handle("PUT /api/admin/auth", s.handle(accessAdmin, false, s.adminPutAuth))
+	mux.Handle("DELETE /api/admin/auth/{provider}", s.handle(accessAdmin, false, s.adminClearProvider))
 
 	// Catalog administration: direct CRUD, review queue, categories, transfer.
 	mux.Handle("GET /api/admin/catalog", s.handle(accessAdmin, false, s.adminListCatalog))

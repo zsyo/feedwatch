@@ -94,6 +94,28 @@ func (m *Manager) Authenticate(username, password string) (User, error) {
 	return u, nil
 }
 
+// LoadUser reads one account by id. Sign-in paths that already know which
+// account they mean — third-party login and fresh registration — do not have a
+// password to check, so they need the same row Authenticate would have read
+// without going through a username lookup.
+func (m *Manager) LoadUser(id int64) (User, error) {
+	var u User
+	var active, mustChange int
+	err := m.db.QueryRow(`SELECT id, username, password_hash, role, is_active, must_change_password, timezone, notify_mode
+		FROM users WHERE id=?`, id).Scan(
+		&u.ID, &u.Username, &u.PasswordHash, &u.Role, &active, &mustChange, &u.Timezone, &u.NotifyMode,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrInvalidCredentials
+	}
+	if err != nil {
+		return User{}, fmt.Errorf("auth: load user %d: %w", id, err)
+	}
+	u.IsActive = active != 0
+	u.MustChangePassword = mustChange != 0
+	return u, nil
+}
+
 // CreateSession returns the raw cookie value plus the stored session. A new
 // CSRF token is bound to every session and is returned to the SPA via /api/auth/me.
 func (m *Manager) CreateSession(userID int64) (string, Session, error) {

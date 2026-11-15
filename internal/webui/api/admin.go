@@ -109,6 +109,11 @@ var editableSettings = map[string]settingRule{
 var envOnlySettings = []string{"webui.cookie_secure", "webui.session_ttl"}
 var informationalSettings = []string{"notify.mode"}
 
+// authManagedSettings are edited on 「登录与注册」 instead of here: they take
+// effect immediately and the page that owns them shows the provider forms next
+// to the switch, which this read-only table cannot.
+var authManagedSettings = []string{settingAllowRegistration}
+
 // readonlyDocs covers the three keys the UI must not edit (see the comment on
 // editableSettings). They still deserve a purpose line of their own.
 var readonlyDocs = map[string]settingDoc{
@@ -121,6 +126,11 @@ var readonlyDocs = map[string]settingDoc{
 		Summary: "登录会话的有效期",
 		Format:  "由环境变量 FEEDWATCH_WEBUI_SESSION_TTL 决定，默认 168h",
 		Detail:  "超过这个时长没有任何操作就需要重新登录；已登录会话每被访问一次都会顺延。修改密码会让全部会话立即失效。",
+	},
+	"webui.allow_registration": {
+		Summary: "是否允许访客自助注册",
+		Format:  "在「登录与注册」页修改，保存即生效",
+		Detail:  "关闭时既不能注册新账号，第三方登录也不会为陌生账号建号；已存在的账号不受影响。默认关闭，公网部署请确认自己的取舍后再打开。",
 	},
 	"notify.mode": {
 		Summary: "遗留的默认通知形式",
@@ -546,6 +556,7 @@ func (s *Server) settingsResponse() map[string]any {
 		"docs":          settingDocs(),
 		"env_only":      envOnlySettings,
 		"informational": informationalSettings,
+		"auth_managed":  authManagedSettings,
 		"applies":       "restart",
 		"note":          settingsApplyNote,
 	}

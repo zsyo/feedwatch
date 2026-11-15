@@ -12,8 +12,10 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"feedwatch/internal/webui/auth"
+	"feedwatch/internal/webui/oauth"
 	"feedwatch/internal/webui/presets"
 	"feedwatch/internal/webui/secrets"
 	"feedwatch/internal/webui/store"
@@ -35,6 +37,12 @@ type Server struct {
 	limiter      *rateLimiter
 	sealer       *secrets.Sealer
 	presetLoader *presets.Loader
+	// oauthProviders is the identity-provider table. Production uses the
+	// built-in URLs; tests point them at a local server.
+	oauthProviders map[string]oauth.Provider
+	// httpClient carries every outbound OAuth call, so one timeout covers the
+	// token exchange and the profile fetch.
+	httpClient *http.Client
 }
 
 // Option customises the Server at construction time. Variadic so every
@@ -46,6 +54,12 @@ func WithPresetLoader(l *presets.Loader) Option {
 	return func(s *Server) { s.presetLoader = l }
 }
 
+// WithOAuthProviders replaces the sign-in provider table. Tests use it to route
+// the token and profile calls to an httptest server.
+func WithOAuthProviders(providers map[string]oauth.Provider) Option {
+	return func(s *Server) { s.oauthProviders = providers }
+}
+
 func New(st *store.Store, am *auth.Manager, assets fs.FS, log *slog.Logger, version string, sealer *secrets.Sealer, opts ...Option) *Server {
 	if log == nil {
 		log = slog.Default()
@@ -54,6 +68,8 @@ func New(st *store.Store, am *auth.Manager, assets fs.FS, log *slog.Logger, vers
 		db: st.DB(), auth: am, assets: assets, log: log,
 		version: version, buildID: readBuildID(assets), limiter: newRateLimiter(),
 		sealer: sealer, presetLoader: presets.NewLoader(),
+		oauthProviders: oauth.Defaults(),
+		httpClient:     &http.Client{Timeout: 30 * time.Second},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -105,6 +121,9 @@ func publicUser(u auth.User) map[string]any {
 		"must_change_password": u.MustChangePassword,
 		"timezone":             u.Timezone,
 		"notify_mode":          u.NotifyMode,
+		// password_set tells the SPA whether to ask for the current password
+		// and whether unbinding the last provider would lock the account out.
+		"password_set": u.PasswordHash != "",
 	}
 }
 

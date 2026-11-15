@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -183,6 +184,14 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 		switch {
 		case r.URL.Path == "/api/auth/login":
 			limit = 10
+		case r.URL.Path == "/api/auth/register":
+			// Same ceiling as login: a shared NAT must still be able to sign
+			// up, while a script cannot fill the users table quickly.
+			limit = 10
+		case strings.HasPrefix(r.URL.Path, "/api/auth/oauth/"):
+			// Every attempt costs a row in oauth_flows and an outbound call to
+			// the provider.
+			limit = 20
 		case !auth.IsSafeMethod(r):
 			limit = 60
 		}
