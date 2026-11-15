@@ -292,6 +292,11 @@ button.small.is-active { background: var(--accent); border-color: var(--accent);
   display: block; max-width: 220px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; margin-top: .2rem;
 }
+/* Short prose next to the sync button explains the version/protection rules
+   without another cramped table on a page that otherwise has one action. */
+.rule-list { margin: .2rem 0 0; padding-left: 1.25rem; color: #475467; font-size: .84rem; line-height: 1.8; }
+.rule-list li + li { margin-top: .25rem; }
+.rule-list code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .8rem; }
 
 @media (max-width: 800px) {
   .layout { grid-template-columns: 1fr; }
@@ -301,6 +306,9 @@ button.small.is-active { background: var(--accent); border-color: var(--accent);
   .nav-subitem { margin-left: 0; padding-left: .6rem; }
   .brand { border: none; padding: 0; }
   .content { padding: 1rem; }
+  /* Stack the page header on narrow screens: keeping the row flex squeezed
+     the action button into a two-character-wide column ("刷 / 新"). */
+  .page-header { flex-direction: column; align-items: flex-start; }
   .topbar { padding: 0 1rem; }
   .compare-grid { grid-template-columns: 1fr; }
   .toolbar-field, .toolbar-field-narrow { flex-basis: 100%; max-width: none; }
