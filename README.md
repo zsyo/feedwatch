@@ -316,7 +316,7 @@ rootless 还有两点差异：容器绑不了 1024 以下端口（默认 8080 �
 | 镜像 tag | 版本号 / `latest` | 版本号加 `-webui`（如 `1.2.3-webui`），移动指针是 `webui` |
 | 配置来源 | 每次启动读 `config.yaml` | **不读 `config.yaml`**：空库启动，订阅 / 通知方式 / 密钥全部在页面里配 |
 | 界面 / 接口 | 无 | Vue 3 SPA + `/api/*`，默认监听 `:8080` |
-| 状态 | `data/state.json`（JSON 原子写） | SQLite WAL（`/app/data/feedwatch.db` 及 `-wal` / `-shm`）+ `secret.key`；库内含订阅目录（`catalog_entries`）与审核提交（`submissions`）表 |
+| 状态 | `data/state.json`（JSON 原子写） | SQLite WAL（`/app/data/feedwatch.db` 及 `-wal` / `-shm`）+ `secret.key`；库内含订阅目录（`catalog_entries`）、审核提交（`submissions`）与远程预设状态（`catalog_preset_state`）表（schema v6） |
 | 用户 | 单用户（配置即全部订阅） | 多用户 + 管理员，订阅与渠道按用户隔离 |
 | 密钥来源 | 环境变量（`${ENV_VAR}` 展开） | 页面填写，AES-256-GCM 加密后存库，不可回读 |
 
@@ -340,7 +340,7 @@ docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里
 | --- | --- | --- |
 | 订阅 / 通知方式 | **看不到入口**，直接调接口返回 403 `role_not_allowed` | 增删改自己的订阅与渠道 |
 | 订阅中心 / 审核中 | **看不到入口**，直接调接口返回 403 `role_not_allowed` | 浏览目录、一键订阅 / 取消、提交与撤回申请、查看全部待审链接 |
-| 目录管理 | 添加 / 编辑 / 停用 / 删除条目、审核提交、管理分类、导入导出 | 403 `forbidden` |
+| 目录管理 | 添加 / 编辑 / 停用 / 删除条目、审核提交、管理分类、导入导出、**获取远程预设数据** | 403 `forbidden` |
 | 渠道密钥 | 只能看到「已配置 / 缺失」与脱敏后的主机名 | 只能看到自己填过哪些字段，值永远不回显 |
 | 他人数据 | 只读下钻：订阅、渠道、投递记录 | 无 |
 | 他人资源启停 | 可停用 / 恢复某个订阅或渠道，**不能改内容** | 无 |
@@ -365,6 +365,32 @@ docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里
 - **显示时区跟着账号走**：默认「跟随服务器」（容器的 `TZ`，compose 默认 `Asia/Shanghai`），也可在「账号设置」里选任意 IANA 时区，存在 `users.timezone`，换设备登录自动同步。它只影响页面渲染：数据库里所有时间戳仍是 RFC3339 UTC，改时区不会重写任何数据。需要自己指定默认值就改 `.env` 的 `TZ`。
 - 页面里的时间统一渲染成 `YYYY-MM-DD HH:mm:ss`（不带 `T` / `Z`），按上面选中的时区换算；`GET /api/meta` 同时给出 `server_timezone` 与 `server_utc_offset`，未登录页面也能标出服务器默认值。WebUI 变体额外 `import _ "time/tzdata"`，因此精简镜像里没有 tzdata 也能解析 IANA 名称。
 
+### 远程预设目录（获取远程预设数据）
+
+仓库里的 `presets/` 是一组**可随项目更新的纯数据文件**：`manifest.json` 列出分类文件，`language-runtime.json` / `cli-tools.json` / `editors.json` / `devops.json` 各放一类常用订阅。每条预设带一个稳定 `preset_key` 和一个单调整数 `version`（与文档格式 `format_version` 是两回事）。默认从 `https://raw.githubusercontent.com/zsyo/feedwatch/main/presets` 拉取；这些 JSON **不进运行镜像**，运行时按地址远程读取，所以上游加了订阅、部署方不必重建镜像。
+
+管理员在「目录管理 → 导入、导出与远程预设 → 获取远程预设数据」点一次即可：一次请求拉完 manifest 与全部分类文件，**全部校验通过后用单事务写入**。任何一个文件 404 / 超时 / JSON 非法 / 字段冲突，就整体回滚、一行都不写，错误响应里带上每个文件的状态方便定位。
+
+| 本地情况 | 同步行为 |
+| --- | --- |
+| 本地没有这个 `preset_key` | 新增目录条目（只是模板，**不创建任何用户订阅**） |
+| 远程 `version` 更高 | 覆盖该条目的名称 / URL / 分类 / 简介 / 主页 / 启停状态 |
+| 远程 `version` 相等或更旧 | 跳过，绝不把旧配置盖回已更新的配置 |
+| 管理员手动编辑过、或用户更新申请被审核通过 | 标记「已保护」，跳过；可点该行的「接受远程更新」解除保护 |
+| 管理员删除过该预设 | 写墓碑，之后永不复活 |
+| 老库里同 URL 的存量条目（示例 / 手工 / 导入） | 按 `url_key` **认领**：未编辑过的按版本正常升级，编辑过的认领后仍受保护 |
+
+条目表新增「预设状态」列：`vN` + 「可更新 / 已保护」，没有 `preset_key` 的显示「手动」。同步返回新增 / 更新 / 跳过 / 受保护 / 认领五项计数与每个文件的结果。
+
+两个设置项在「全局设置」里（保存后**需重启进程**生效，与轮询参数一致）：
+
+- `presets.base_url`：换成 GitHub raw 镜像、CDN 或内网可达的地址。只允许 `https`、443 端口，禁止 userinfo / 查询串 / 片段，域名解析到私网、环回、链路本地或云元数据地址会被拒绝；重定向逐跳复检，最多 3 跳。保留 `HTTPS_PROXY` / `NO_PROXY` 的隐式代理支持。
+- `presets.timeout`：一次同步**所有文件**的总时限（默认 `15s`，范围 1s–2m），与管单个 feed 的 `http.timeout` 相互独立。
+
+国内网络拉不到官方 raw 时的兜底：把 `presets.base_url` 改成可访问的镜像（推荐）；或把分类 JSON 整理成 `feedwatch-catalog` v1 文档（字段 `name` / `url` / `category` / `description` / `homepage` / `enabled`）后用「导入」手动加载。**预设 JSON 与导入文档是两种不同格式，不能直接把下载下来的分类文件丢进导入框**；导入仍然是无版本概念的 `skip` / `overwrite` / `error` 三策略，与远程同步是两条独立路径。
+
+**注意**：`presets/` 只有在提交推送到 GitHub 后才会出现在官方 raw 地址上。本地开发、或用了未推送的 tag 时点按钮会拿到 404，这是预期行为，不是故障；验证时用可访问的镜像地址即可。
+
 ### 通知语义
 
 - 同一 URL 全局每轮只抓一次（`url_key = sha256(规范化 URL)`），抓完按每个用户各自的过滤条件、`always` / `on_update` 分流。`digest` / `per_feed` 由账号决定而不是订阅：同一个用户的所有订阅共用一个形式，一轮里不会同时产出「汇总一条」和「每个项目一条」。
@@ -377,7 +403,7 @@ docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里
 
 页面：`/login`、概览、**订阅中心 `/catalog`**（侧边栏排在「我的订阅」之前）、我的订阅、通知方式、账号设置；**审核中 `/catalog/pending`** 是订阅中心内的子页，从订阅中心页头的「审核中的链接」进入、可返回，不再单列在侧边栏；停留在该子页时侧边栏的「订阅中心」仍保持高亮。管理员另有用户管理（含单个用户下钻 `/admin/users/:id`，只读 + 启停）、**目录管理 `/admin/catalog`**、轮询池、限速状态、全局设置、审计日志。普通用户看不到管理端入口，管理员看不到订阅 / 渠道 / 订阅中心的入口，后端角色守卫双向拦截。
 
-订阅中心支持关键字（名称 / URL / 简介 / 分类名）、分类筛选与按订阅人数 / 名称 / 分类排序，卡片直接显示「已订阅」与取消入口；页面下方是「提交新订阅」和「我的提交」（状态、驳回理由、改前 / 改后对比、撤回）。审核中子页是只读的，只提供「复制信息」并常驻风险提示。目录管理页分五块：审核队列（含改前 / 改后对比、通过 / 驳回理由）、手动添加、目录条目表（编辑 / 停用 / 删除）、分类管理（添加 / 重命名 / 删除）、导入导出。搜索 / 筛选 / 排序目前是**前端本地**计算（一次返回全量目录），与现有列表页范式一致。
+订阅中心支持关键字（名称 / URL / 简介 / 分类名）、分类筛选与按订阅人数 / 名称 / 分类排序，卡片直接显示「已订阅」与取消入口；页面下方是「提交新订阅」和「我的提交」（状态、驳回理由、改前 / 改后对比、撤回）。审核中子页是只读的，只提供「复制信息」并常驻风险提示。目录管理页分六块：审核队列（含改前 / 改后对比、通过 / 驳回理由）、手动添加、目录条目表（编辑 / 停用 / 删除 / 预设状态 / 接受远程更新）、分类管理（添加 / 重命名 / 删除）、导入导出与远程预设（导出、导入、「获取远程预设数据」及逐文件结果表）。搜索 / 筛选 / 排序目前是**前端本地**计算（一次返回全量目录），与现有列表页范式一致。
 
 ```bash
 make build-webui                 # 或 sh web/build.sh，产物写入 internal/webui/embedded/（已 gitignore）
@@ -419,8 +445,9 @@ WebUI 变体**不接受 `-config`**：传了只会记一条 `-config is ignored;
 | v3 | `users.timezone`（账号显示时区） |
 | v4 | `users.notify_mode`（通知形式改为账号级）；老库残留的 `subscriptions.mode` 列不读不写 |
 | v5 | `catalog_categories` / `catalog_entries` / `submissions`（订阅中心） |
+| v6 | `catalog_preset_state` 表 + `catalog_entries` 的 `preset_key` / `preset_version` / `preset_edited` 三列与偏唯一索引（远程预设） |
 
-v5 **只新增三张表**，老库升级后不会自动获得示例目录（种子只在 `users` 为空时执行）；想预置示例，可在「目录管理 → 导入」加载一份从新库导出的 JSON。其余功能升级后直接可用，无需手工改数据。备份时数据库与 `secret.key` 一起带上即可，目录数据就在同一个库里。
+v5 **只新增三张表**，老库升级后不会自动获得示例目录（种子只在 `users` 为空时执行）；想预置示例，可在「目录管理 → 导入」加载一份从新库导出的 JSON。v6 通过 `ensureColumn()` 给老库的 `catalog_entries` 补三列（默认 `''` / `0` / `0`），并在补列之后才建偏唯一索引 `WHERE preset_key <> ''`（存量行都是空串，不受影响）；**不会重建表、不改动业务数据**。升级后第一次点「获取远程预设数据」，会按 URL 认领已有的示例 / 手工 / 导入条目并按版本升级，不会生成重复行。其余功能升级后直接可用，无需手工改数据。备份时数据库与 `secret.key` 一起带上即可，目录与预设状态都在同一个库里。
 
 不想保留旧数据就干脆删卷重来（`docker compose -f docker-compose.webui.yml down -v`），首启会重新生成管理员密码与新密钥。**`data/` 卷与 `secret.key` 必须同进同退**，只留其一没有任何意义。
 
@@ -469,7 +496,7 @@ docker logs fw-rc     # 空库首启：master key、admin 密码、listening
 docker rm -f fw-rc
 ```
 
-检查项：首启能拿到一次性管理员密码并完成首登改密 → 建普通用户 → 确认侧边栏「订阅中心」排在「我的订阅」之上、且没有平级的「审核中」项 → 订阅中心能看到示例目录 → 从页头进入审核中子页时「订阅中心」仍高亮、可返回 → 一键订阅后「我的订阅」出现且没有补发历史 → 提交新增 / 更新申请 → 「审核中」页显示风险提示与改前 / 改后对比、可复制 → 管理员在目录管理里通过 / 驳回、分类增删、导出导入 → 用户侧状态与驳回理由正确 → 在页面上建渠道（含密钥）→ 触发一轮抓取与投递 → 投递记录与 `secret_state` 符合预期。base 变体则用 `-once -dry-run` 跑一遍配置解析与渲染。**升过级的旧数据要单独验**：拿一份旧卷副本挂上去，确认能启动、v5 只补出三张目录表、渠道凭据按文档重填后能发出去。
+检查项：首启能拿到一次性管理员密码并完成首登改密 → 建普通用户 → 确认侧边栏「订阅中心」排在「我的订阅」之上、且没有平级的「审核中」项 → 订阅中心能看到示例目录 → 从页头进入审核中子页时「订阅中心」仍高亮、可返回 → 一键订阅后「我的订阅」出现且没有补发历史 → 提交新增 / 更新申请 → 「审核中」页显示风险提示与改前 / 改后对比、可复制 → 管理员在目录管理里通过 / 驳回、分类增删、导出导入 → 在「全局设置」确认 `presets.base_url` / `presets.timeout` 两项及说明 → 把 `presets.base_url` 临时改成一个可访问的镜像并重启，点「获取远程预设数据」看到逐文件结果与计数，重复点击只跳过、不重复新增 → 手动编辑某条预设后确认它变「已保护」且不被更高版本覆盖、点「接受远程更新」后恢复可更新 → 删除一条预设后再次同步不会复活 → 用户侧状态与驳回理由正确 → 在页面上建渠道（含密钥）→ 触发一轮抓取与投递 → 投递记录与 `secret_state` 符合预期。base 变体则用 `-once -dry-run` 跑一遍配置解析与渲染。**升过级的旧数据要单独验**：拿一份旧卷副本挂上去，确认能启动、v5 补出三张目录表、v6 补出预设三列与 `catalog_preset_state`、渠道凭据按文档重填后能发出去，且首次远程同步能认领存量条目而非重复插入。
 
 **③ 发现问题就发下一个 rc**：改代码 → 新提交 → `v1.2.3-rc.2`。**不要重推同名 rc tag**：GHCR 上的同名 tag 会被覆盖，已经拉过 `rc.1` 的人将无法复现当时的镜像。
 
@@ -574,12 +601,14 @@ internal/watcher/             base 核心编排：有界并发抓取 → 过滤 
 internal/webui/               WebUI 变体（全部 //go:build webui）：首启只建 admin、渠道字段表、URL 规范化、embed 资源
 internal/webui/catalogspec.go 订阅目录的字段上限、URL 安全校验、内置示例、导入导出结构（Go 侧唯一真源）
 internal/webui/secrets/       主密钥加载与 AES-256-GCM 信封加密（唯一知道密钥的包）
-internal/webui/store/         SQLite 建表/迁移/WAL/目录可写性预检（schema v5，含三张目录表）
+internal/webui/store/         SQLite 建表/迁移/WAL/目录可写性预检（schema v6，含三张目录表与预设状态表）
 internal/webui/auth/          bcrypt 密码、session、CSRF
-internal/webui/api/           HTTP server、中间件链、/api/* 端点与 SPA 静态服务；catalog.go / catalog_admin.go 是订阅中心
+internal/webui/presets/       远程预设的 JSON 校验、加载器与 SSRF 防护（纯函数 + 网络，不碰数据库）
+internal/webui/api/           HTTP server、中间件链、/api/* 端点与 SPA 静态服务；catalog.go / catalog_admin.go / catalog_presets.go 是订阅中心与远程同步
 internal/webui/orchestrator/  多租户轮询：URL 去重池、每用户策略分流、独立投递与按渠道类型限速
 internal/webui/embedded/      只提交 stub.html / .gitkeep，真实产物由构建生成且 gitignore
-web/                         Vue 3 + Vite + TS 源码；CatalogView / CatalogPendingView / AdminCatalogView 与 build.sh / build.ps1
+web/                         Vue 3 + Vite + TS 源码；CatalogView / CatalogPendingView / AdminCatalogView、presets.ts 与 build.sh / build.ps1
+presets/                     远程预设数据：manifest.json + 4 个分类 JSON（运行时远程读取，不进镜像）
 testdata/                     测试用 feed 夹具
 ```
 
@@ -618,6 +647,8 @@ WebUI 专项用例另覆盖：bcrypt / session / CSRF 与 cookie 属性、越权
 
 订阅中心专项用例：v4→v5 迁移只补三张表且保留用户数据、外键 `ON DELETE SET NULL`、pending 部分唯一索引（驳回 / 撤回后可重提）、示例目录只是模板（不写 `subscriptions` / `feed_pool` / `user_seen`）、目录 URL 的协议 / userinfo / 敏感 query / 长度与别名归一化校验、admin 与 member 的双向角色守卫、**一键订阅复制基线不重放历史**、去重防刷与待审上限、新增与更新两类审核流（含 `before_json` 快照、`entry_gone` / `conflict_url`）、撤回、驳回理由可见、分类删除级联、管理员手动编辑不产生申请、导入导出往返与三种冲突策略。改前端后还要在 `web/` 目录下跑 `npm run typecheck`，并重新执行构建脚本再 `go build -tags webui`。
 
+远程预设专项用例：仓库内 `presets/*.json` 直接用生产校验器验一遍（防止拼错 key / 重复 URL 混入发版数据）、manifest 与分类文件的格式/文件名/分类漂移、跨文件 `preset_key` 与 `url_key` 去重、SSRF 的协议 / 端口 / userinfo / 私网与云元数据 IP / DNS 解析复检 / 重定向逐跳复检 / 跳数上限 / 1 MiB 体积上限 / 上下文取消、加载器的逐文件状态与「失败文件之后不再写」、v5→v6 补列与偏唯一索引；接口层覆盖只升不降、连续多版本升级后 `preset_edited` 仍为 0、同版本重复同步、存量条目区分认领、管理员编辑与审核通过置保护、`accept-remote` 解锁、墓碑不复活、拉取失败与 `preset_invalid_document` 零写入、事务内 `url_key` 冲突时**把先前的更新一并回滚**、缺少 loader 的报错、目录列表暴露三个预设状态字段。全部用 `httptest` 本地服务器，不发真实网络请求。
+
 改 workflow 后建议跑一次静态检查（需自行安装 `go install github.com/rhysd/actionlint/cmd/actionlint@latest`）：
 
 ```bash
@@ -637,3 +668,9 @@ actionlint .github/workflows/docker-publish.yml
 - WebUI 变体的 `-dry-run` 无意义（会被忽略并记一条日志），`-once` 只跑一轮「抓取 → 生成投递计划 → 投递」后退出。
 - 订阅中心的搜索 / 筛选 / 排序是浏览器对一次返回的全量目录做本地计算；目录量级显著变大后需改成后端分页，并**同时移除本地过滤**（否则只会过滤当前页）。
 - 「审核中」页会把待审 URL 明文展示给全体普通用户并允许复制，所以目录 URL 的 http/https、无 userinfo、无敏感 query 校验**不能放宽**；FeedWatch 不验证这些链接的内容、可用性与安全性，手动复制添加前需自行判断。
+- `presets.base_url` 默认指向官方仓库的 `main` 分支，**这些文件必须先推送到 GitHub 才存在**；本地开发或使用未推送的 tag 时同步必然 404，需要临时把基址换成可访问的镜像。`presets.base_url` / `presets.timeout` 与轮询参数一样保存后需**重启进程**生效。
+- 远程预设的 SSRF 防护按「网络属性」判定而非域名白名单（管理员要能换任意镜像）：会拒绝私网 / 环回 / 链路本地 / 云元数据 IP，但对**代理侧发生的 DNS rebinding** 无能为力；自建代理或镜像时请自行保证上游可信。
+- 一次同步用 `SetMaxOpenConns(1)` 的单个事务写完整批预设，文件较多时会短暂占用唯一的 SQLite 连接；网络 IO 与文档校验都放在 `Begin()` 之前以缩短占用时间。
+- 管理员把某条目录条目的 URL 改成与某个远程预设相同、或远程预设之间出现 URL 冲突时，整批同步返回 409 `preset_conflict` 并**整体回滚**（包括本已成功的条目），需先解决冲突再重试。
+- 远程预设的 `version` 只允许单调前进：上游误把版本调小会被静默跳过（计入 `skipped`），不会把本地回退；管理员删除过的预设会留下墓碑，同步永不复活，也没有页面入口清除墓碑（需要时直接改 `catalog_preset_state.deleted`）。
+- 预设 JSON 与「导入」使用的 `feedwatch-catalog` v1 是两种格式，下载下来的分类文件不能直接丢进导入框；需要离线兜底时请按导入格式整理，或把 `presets.base_url` 指向可访问的镜像。
