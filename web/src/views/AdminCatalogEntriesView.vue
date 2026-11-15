@@ -115,12 +115,12 @@ async function removeEntry(row: CatalogEntry): Promise<void> {
 
 async function acceptRemote(row: CatalogEntry): Promise<void> {
   if (!window.confirm(
-    `「${row.name}」被标记为本地已编辑，远程同步不会覆盖它。解除保护后，下次同步会用更高版本覆盖你的修改。继续？`,
+    `「${row.name}」已被你手动改过，处于「已保护」状态，远程同步会跳过它。解除保护后，下次同步若远程版本更高，会覆盖你的修改。继续？`,
   )) return
   clear()
   try {
     await api.post(`/api/admin/catalog/${row.id}/accept-remote`, {})
-    done('已解除保护，下次「获取远程预设数据」会应用更新的版本。')
+    done('已解除保护，恢复「未锁定」；下次同步若远程版本更高，会覆盖你的修改。')
     await load()
   } catch (e) {
     fail(e)
@@ -160,7 +160,7 @@ async function acceptRemote(row: CatalogEntry): Promise<void> {
 
   <div class="card">
     <h2>目录条目（{{ entries.length }}）</h2>
-    <p class="card-sub">停用只是从订阅中心隐藏，仍占用该 URL；删除才会释放 URL。预设状态里的「已保护」表示你手动改过，远程同步会跳过它，可点「接受远程更新」解锁。</p>
+    <p class="card-sub">停用只是从订阅中心隐藏，仍占用该 URL；删除才会释放 URL。「预设状态」里的 vN 是本地已应用的预设版本，<strong>不代表远程已有新版本</strong>；「未锁定」表示没手动改过、允许被更高版本覆盖，「已保护」表示你改过、同步会跳过，可点「解除保护」恢复。</p>
     <div class="table-wrap">
       <table>
         <thead><tr><th>ID</th><th>名称</th><th>分类</th><th>链接</th><th>订阅人数</th><th>状态</th><th>预设状态</th><th>更新时间</th><th>操作</th></tr></thead>
@@ -178,7 +178,7 @@ async function acceptRemote(row: CatalogEntry): Promise<void> {
                 <span v-else class="preset-state">
                   <span class="mono">v{{ row.preset_version }}</span>
                   <span v-if="row.preset_edited" class="badge badge-warn">已保护</span>
-                  <span v-else class="badge badge-on">可更新</span>
+                  <span v-else class="badge">未锁定</span>
                 </span>
               </td>
               <td class="mono">{{ formatTime(row.updated_at) }}</td>
@@ -187,7 +187,7 @@ async function acceptRemote(row: CatalogEntry): Promise<void> {
                   <button class="small" type="button" @click="startEdit(row)">{{ editing === row.id ? '收起' : '编辑' }}</button>
                   <button class="small" type="button" @click="toggleEnabled(row)">{{ row.enabled ? '停用' : '启用' }}</button>
                   <button class="small" type="button" @click="removeEntry(row)">删除</button>
-                  <button v-if="row.preset_key && row.preset_edited" class="small" type="button" @click="acceptRemote(row)">接受远程更新</button>
+                  <button v-if="row.preset_key && row.preset_edited" class="small" type="button" @click="acceptRemote(row)">解除保护</button>
                 </div>
               </td>
             </tr>
