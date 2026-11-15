@@ -1,4 +1,4 @@
--- FeedWatch WebUI schema, version 5.
+-- FeedWatch WebUI schema, version 6.
 -- Every statement is IF NOT EXISTS, so running this on an older database only
 -- adds the tables it is missing. Adding a COLUMN to an existing table is not
 -- covered by this file: migrate.go carries those as explicit ALTER TABLE steps.
@@ -237,3 +237,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_submissions_pending_url
 CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status, id);
 CREATE INDEX IF NOT EXISTS idx_submissions_user ON submissions(submitted_by, id);
 CREATE INDEX IF NOT EXISTS idx_submissions_entry ON submissions(entry_id);
+
+-- ===== Remote preset state (v6) =====
+-- The catalog_entries preset columns are NOT declared here: adding a column to
+-- an existing table is an incremental ALTER in migrate.go, and on an upgraded
+-- database this file runs BEFORE those columns exist. The partial unique index
+-- on preset_key is created there for the same reason.
+CREATE TABLE IF NOT EXISTS catalog_preset_state (
+  preset_key   TEXT PRIMARY KEY,
+  last_version INTEGER NOT NULL DEFAULT 0,
+  deleted      INTEGER NOT NULL DEFAULT 0,
+  updated_at   TEXT NOT NULL
+);

@@ -16,7 +16,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 5
+const schemaVersion = 6
 
 func migrate(db *sql.DB) error {
 	var version int
@@ -57,6 +57,28 @@ func migrate(db *sql.DB) error {
 	// v5 adds the three catalog tables. They are whole new tables, so the
 	// IF NOT EXISTS statements above cover both a fresh database and a v4
 	// upgrade; no incremental ALTER step is needed for them.
+	//
+	// v6: catalog_preset_state is another whole new table, so schemaSQL covers
+	// it too. The three catalog_entries columns are ADD COLUMN steps and must
+	// be applied here; schema.sql deliberately does not declare them, otherwise
+	// a fresh database and an upgraded one would end up with different shapes.
+	for _, col := range []struct{ name, decl string }{
+		{"preset_key", "TEXT NOT NULL DEFAULT ''"},
+		{"preset_version", "INTEGER NOT NULL DEFAULT 0"},
+		{"preset_edited", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := ensureColumn(tx, "catalog_entries", col.name, col.decl); err != nil {
+			return err
+		}
+	}
+	// The partial unique index cannot live in schema.sql: on an upgraded
+	// database that file runs before these columns exist. ALTER TABLE ADD
+	// COLUMN also cannot declare UNIQUE, and every pre-existing row has
+	// preset_key='', so a plain unique index would fail immediately.
+	if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_catalog_entries_preset_key
+		ON catalog_entries(preset_key) WHERE preset_key <> ''`); err != nil {
+		return fmt.Errorf("webui: create preset_key index: %w", err)
+	}
 	// PRAGMA cannot be parameterized, but the value is a compile-time constant.
 	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		return fmt.Errorf("webui: set schema version: %w", err)
