@@ -16,6 +16,8 @@ import AdminAuditView from './views/AdminAuditView.vue'
 import CatalogView from './views/CatalogView.vue'
 import CatalogPendingView from './views/CatalogPendingView.vue'
 import AdminCatalogView from './views/AdminCatalogView.vue'
+import AdminCatalogEntriesView from './views/AdminCatalogEntriesView.vue'
+import AdminCatalogReviewsView from './views/AdminCatalogReviewsView.vue'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -46,8 +48,8 @@ const router = createRouter({
     // Catalog administration is a group of focused subpages. The group entry
     // above stays put so bookmarks and the dashboard shortcut keep working;
     // every subpage has its own route and its own sidebar item.
-    { path: '/admin/catalog/entries', name: 'admin-catalog-entries', component: AdminCatalogView, meta: { admin: true } },
-    { path: '/admin/catalog/reviews', name: 'admin-catalog-reviews', component: AdminCatalogView, meta: { admin: true } },
+    { path: '/admin/catalog/entries', name: 'admin-catalog-entries', component: AdminCatalogEntriesView, meta: { admin: true } },
+    { path: '/admin/catalog/reviews', name: 'admin-catalog-reviews', component: AdminCatalogReviewsView, meta: { admin: true } },
     { path: '/admin/catalog/categories', name: 'admin-catalog-categories', component: AdminCatalogView, meta: { admin: true } },
     { path: '/admin/catalog/transfer', name: 'admin-catalog-transfer', component: AdminCatalogView, meta: { admin: true } },
     { path: '/admin/catalog/presets', name: 'admin-catalog-presets', component: AdminCatalogView, meta: { admin: true } },

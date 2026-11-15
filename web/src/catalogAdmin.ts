@@ -81,6 +81,11 @@ export function useNotice() {
       err.value = ''
       success.value = ''
     },
+    // Reloading after a successful write must not wipe the confirmation: only
+    // the previous error is stale at that point.
+    clearError(): void {
+      err.value = ''
+    },
     fail(e: unknown): void {
       success.value = ''
       err.value = errorMessage(e)
