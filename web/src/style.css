@@ -40,7 +40,8 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .nav-label { margin: 1rem .6rem .35rem; font-size: .7rem; letter-spacing: .09em; color: #7d8ba1; text-transform: uppercase; }
 .nav-item { padding: .55rem .7rem; border-radius: 7px; font-size: .9rem; color: #d0d5dd; }
 .nav-item:hover { background: #1d2939; color: #fff; }
-.nav-item.router-link-exact-active { background: var(--accent); color: #fff; font-weight: 600; }
+.nav-item.router-link-exact-active,
+.nav-item.nav-item--active { background: var(--accent); color: #fff; font-weight: 600; }
 .sidebar-foot { font-size: .72rem; color: #7d8ba1; padding: 0 .6rem; }
 
 .main { min-width: 0; display: flex; flex-direction: column; }

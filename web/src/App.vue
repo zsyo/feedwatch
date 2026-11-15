@@ -24,14 +24,22 @@ const adminNav = [
 ]
 const memberNav = [
   { to: '/', label: '概览' },
-  { to: '/subscriptions', label: '我的订阅' },
   { to: '/catalog', label: '订阅中心' },
-  { to: '/catalog/pending', label: '审核中' },
+  { to: '/subscriptions', label: '我的订阅' },
   { to: '/channels', label: '通知方式' },
   { to: '/settings', label: '账号设置' },
 ]
 const navItems = computed(() => (isAdmin.value ? adminNav : memberNav))
 const navLabel = computed(() => (isAdmin.value ? '管理' : '工作台'))
+
+// /catalog/pending is a sibling route, not a child of /catalog, and it no
+// longer has its own sidebar item. Keep the catalog item highlighted there
+// with an explicit prefix check: router-link-active would not match (flat
+// records are not ancestors of each other), and applying it globally would
+// make '/' active on every page.
+function navActive(to: string): boolean {
+  return to === '/catalog' && (route.path === '/catalog' || route.path.startsWith('/catalog/'))
+}
 
 onMounted(async () => {
   try {
@@ -66,7 +74,8 @@ async function signOut(): Promise<void> {
 
       <nav>
         <p class="nav-label">{{ navLabel }}</p>
-        <RouterLink v-for="item in navItems" :key="item.to" :to="item.to" class="nav-item">
+        <RouterLink v-for="item in navItems" :key="item.to" :to="item.to" class="nav-item"
+          :class="{ 'nav-item--active': navActive(item.to) }">
           {{ item.label }}
         </RouterLink>
       </nav>
