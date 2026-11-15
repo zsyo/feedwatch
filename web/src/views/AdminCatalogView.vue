@@ -613,7 +613,7 @@ async function acceptRemote(row: CatalogEntry): Promise<void> {
         <div class="form-actions">
           <button class="primary" type="button" :disabled="busy || syncing" @click="syncRemote">{{ syncing ? '同步中…' : '获取远程预设数据' }}</button>
         </div>
-        <p class="hint">地址可在「全局设置 → presets.base_url」改成镜像；拉取失败时也可在左侧「导入」手动上传同一份 JSON。设置改动需重启进程生效。</p>
+        <p class="hint">地址可在「全局设置 → presets.base_url」改成可访问的镜像；设置改动需重启进程生效。离线兜底时，请把分类 JSON 整理成左侧「导入」使用的 feedwatch-catalog v1 格式再上传——两种 JSON 结构不同，不能直接导入。</p>
         <div v-if="syncResult" class="preset-summary">
           <p class="hint">新增 {{ syncResult.created }}、更新 {{ syncResult.updated }}、跳过 {{ syncResult.skipped }}、受保护 {{ syncResult.protected }}、认领 {{ syncResult.adopted }}。</p>
           <div class="table-wrap">
