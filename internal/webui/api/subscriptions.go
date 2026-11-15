@@ -82,69 +82,101 @@ func (s *Server) createSubscription(w http.ResponseWriter, r *http.Request, c Ct
 		fail(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	normalized, key, err := webui.URLKey(req.URL)
-	if err != nil {
-		fail(w, http.StatusBadRequest, "invalid_url", err.Error())
+	key, e := s.subscribeURL(c.User.ID, subscribeInput{
+		URL:          req.URL,
+		DisplayName:  req.DisplayName,
+		SourceType:   req.SourceType,
+		Filter:       req.Filter,
+		NotifyPolicy: req.NotifyPolicy,
+	})
+	if e != nil {
+		fail(w, e.status, e.code, e.message)
 		return
 	}
-	policy := req.NotifyPolicy
+	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "url_key": key})
+}
+
+// subscribeInput is what both the manual "add subscription" form and the
+// catalog's one-click subscribe pass to subscribeURL.
+type subscribeInput struct {
+	URL          string
+	DisplayName  string
+	SourceType   string
+	Filter       map[string]any
+	NotifyPolicy string
+}
+
+// writeError turns a subscribeURL failure into an HTTP-ready error so callers
+// cannot disagree about status codes or error codes.
+type writeError struct {
+	status  int
+	code    string
+	message string
+}
+
+// subscribeURL is the ONLY place allowed to INSERT INTO subscriptions.
+//
+// Creating a subscription is a three-write transaction: the subscription row,
+// the global polling pool, and a copy of the current seen_ids baseline for this
+// user. Skipping the last one makes the orchestrator treat every historical
+// release as new and replay it on the next cycle. Every subscription entry
+// point (manual form, catalog quick subscribe, future imports) must go through
+// here.
+func (s *Server) subscribeURL(userID int64, in subscribeInput) (string, *writeError) {
+	normalized, key, err := webui.URLKey(in.URL)
+	if err != nil {
+		return "", &writeError{http.StatusBadRequest, "invalid_url", err.Error()}
+	}
+	policy := in.NotifyPolicy
 	if policy == "" {
 		policy = "on_update"
 	}
 	if policy != "always" && policy != "on_update" {
-		fail(w, http.StatusBadRequest, "invalid_policy", "notify_policy must be always or on_update")
-		return
+		return "", &writeError{http.StatusBadRequest, "invalid_policy", "notify_policy must be always or on_update"}
 	}
-	sourceType := req.SourceType
+	sourceType := in.SourceType
 	if sourceType == "" {
 		sourceType = "atom"
 	}
 	filterJSON := []byte("{}")
-	if req.Filter != nil {
-		filterJSON, err = json.Marshal(req.Filter)
+	if in.Filter != nil {
+		filterJSON, err = json.Marshal(in.Filter)
 		if err != nil {
-			fail(w, http.StatusBadRequest, "invalid_filter", err.Error())
-			return
+			return "", &writeError{http.StatusBadRequest, "invalid_filter", err.Error()}
 		}
 	}
 	now := store.Now()
 
 	tx, err := s.db.Begin()
 	if err != nil {
-		fail(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
+		return "", &writeError{http.StatusInternalServerError, "db_error", err.Error()}
 	}
 	defer tx.Rollback()
 	res, err := tx.Exec(`INSERT OR IGNORE INTO subscriptions
 		(user_id, url, url_key, display_name, source_type, filter_json, notify_policy, enabled, seeded_at)
 		VALUES (?,?,?,?,?,?,?,?,?)`,
-		c.User.ID, normalized, key, req.DisplayName, sourceType, string(filterJSON), policy, 1, now)
+		userID, normalized, key, in.DisplayName, sourceType, string(filterJSON), policy, 1, now)
 	if err != nil {
-		fail(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
+		return "", &writeError{http.StatusInternalServerError, "db_error", err.Error()}
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
-		fail(w, http.StatusConflict, "duplicate_subscription", "this URL is already subscribed")
-		return
+		return "", &writeError{http.StatusConflict, "duplicate_subscription", "this URL is already subscribed"}
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO feed_pool (url_key, url, source_type) VALUES (?,?,?)`,
 		key, normalized, sourceType); err != nil {
-		fail(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
+		return "", &writeError{http.StatusInternalServerError, "db_error", err.Error()}
 	}
 	// New subscriptions start from the current global baseline: never replay
 	// releases published before the user joined.
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO user_seen (user_id, url_key, release_id, seen_at)
-		SELECT ?, url_key, release_id, ? FROM seen_ids WHERE url_key=?`, c.User.ID, now, key); err != nil {
-		fail(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
+		SELECT ?, url_key, release_id, ? FROM seen_ids WHERE url_key=?`, userID, now, key); err != nil {
+		return "", &writeError{http.StatusInternalServerError, "db_error", err.Error()}
 	}
 	if err := tx.Commit(); err != nil {
-		fail(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
+		return "", &writeError{http.StatusInternalServerError, "db_error", err.Error()}
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "url_key": key})
+	return key, nil
 }
 
 func (s *Server) updateSubscription(w http.ResponseWriter, r *http.Request, c Ctx) {

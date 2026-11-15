@@ -316,7 +316,7 @@ rootless 还有两点差异：容器绑不了 1024 以下端口（默认 8080 �
 | 镜像 tag | 版本号 / `latest` | 版本号加 `-webui`（如 `1.2.3-webui`），移动指针是 `webui` |
 | 配置来源 | 每次启动读 `config.yaml` | **不读 `config.yaml`**：空库启动，订阅 / 通知方式 / 密钥全部在页面里配 |
 | 界面 / 接口 | 无 | Vue 3 SPA + `/api/*`，默认监听 `:8080` |
-| 状态 | `data/state.json`（JSON 原子写） | SQLite WAL（`/app/data/feedwatch.db` 及 `-wal` / `-shm`）+ `secret.key` |
+| 状态 | `data/state.json`（JSON 原子写） | SQLite WAL（`/app/data/feedwatch.db` 及 `-wal` / `-shm`）+ `secret.key`；库内含订阅目录（`catalog_entries`）与审核提交（`submissions`）表 |
 | 用户 | 单用户（配置即全部订阅） | 多用户 + 管理员，订阅与渠道按用户隔离 |
 | 密钥来源 | 环境变量（`${ENV_VAR}` 展开） | 页面填写，AES-256-GCM 加密后存库，不可回读 |
 
@@ -330,7 +330,7 @@ docker compose -f docker-compose.webui.yml up -d --build
 docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里打印一次
 ```
 
-**不需要 `config.yaml`，也不需要任何渠道密钥变量**：容器首启就是一个干净的空库，只有 `users` 表里那条 `admin` 记录加一套默认设置。浏览器打开 `http://<宿主机>:8080`（端口由 `.env` 的 `WEBUI_HTTP_PORT` 控制），用日志里的 `admin` 密码登录，**首次登录会被强制改密**；改密后所有旧会话立即失效。管理员可在「用户管理」里新建账号或重置密码（新密码只在页面上显示一次）。
+**不需要 `config.yaml`，也不需要任何渠道密钥变量**：容器首启就是一个干净的空库，只有 `users` 表里那条 `admin` 记录、一套默认设置，以及 8 条示例订阅目录（GitHub 仓库的 `releases.atom`）和 3 个分类。示例只是可浏览的模板，**不会给任何人创建订阅**；老库升级不会自动获得，可在「目录管理 → 导入」加载。浏览器打开 `http://<宿主机>:8080`（端口由 `.env` 的 `WEBUI_HTTP_PORT` 控制），用日志里的 `admin` 密码登录，**首次登录会被强制改密**；改密后所有旧会话立即失效。管理员可在「用户管理」里新建账号或重置密码（新密码只在页面上显示一次）。
 
 若经 HTTPS 反向代理访问，把 `.env` 的 `FEEDWATCH_WEBUI_COOKIE_SECURE` 设为 `true`；纯 HTTP 直连时务必保持 `false`，否则会话 cookie 带 `Secure` 标志、浏览器不会回传，导致无法登录。会话有效期由 `FEEDWATCH_WEBUI_SESSION_TTL` 控制（默认 `168h`）。
 
@@ -339,6 +339,8 @@ docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里
 | | 管理员（`admin`） | 普通用户 |
 | --- | --- | --- |
 | 订阅 / 通知方式 | **看不到入口**，直接调接口返回 403 `role_not_allowed` | 增删改自己的订阅与渠道 |
+| 订阅中心 / 审核中 | **看不到入口**，直接调接口返回 403 `role_not_allowed` | 浏览目录、一键订阅 / 取消、提交与撤回申请、查看全部待审链接 |
+| 目录管理 | 添加 / 编辑 / 停用 / 删除条目、审核提交、管理分类、导入导出 | 403 `forbidden` |
 | 渠道密钥 | 只能看到「已配置 / 缺失」与脱敏后的主机名 | 只能看到自己填过哪些字段，值永远不回显 |
 | 他人数据 | 只读下钻：订阅、渠道、投递记录 | 无 |
 | 他人资源启停 | 可停用 / 恢复某个订阅或渠道，**不能改内容** | 无 |
@@ -346,11 +348,17 @@ docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里
 
 **想给自己配订阅，就新建一个普通用户**：管理员刻意被挡在业务配置之外，运维账号与订阅账号不会混在一起，管理员也无法借权限读到别人的 webhook / token。下钻页面的写操作只接受 `{"enabled": bool}`，多传一个字段即 400 `admin_readonly`。
 
+订阅中心的「更新信息要审核」只针对**普通用户**：管理员是可信角色，在「目录管理」里添加或编辑条目立即生效、不产生待审申请；用户提交的新增 / 更新申请则必须由管理员在审核队列里通过或驳回后才写入目录。「审核中」页对全体普通用户开放，但**只能查看和手动复制**，不能直接订阅。
+
 ### 数据、主密钥与备份
 
 - 数据库与主密钥都在命名卷 `feedwatch-webui-data:/app/data`。SQLite WAL 需要**目录**可写，启动期有和 base 一样的 `CreateTemp` 预检；把卷换成 bind mount 时同样用 `.env` 里的 `FW_UID` / `FW_GID` 指定宿主机属主——**rootless Docker 例外**，此时容器的 uid 不是宿主 uid，要么保留命名卷，要么写 `user: "0:0"`，见 [rootless Docker 下的 uid 映射](#rootless-docker-下的-uid-映射)。
 - **`secret.key` 与数据库必须一起备份、一起丢弃**。首启用 `O_CREATE|O_EXCL` 生成 32 字节（0600），做渠道密钥的信封加密：`fwsec:v1:` + `base64.RawURLEncoding(nonce ‖ ciphertext ‖ tag)`，AAD 绑定渠道 id，把密文复制到别的渠道行也解不开。读失败**绝不重新生成**（那会让已存凭据全部变成无法解密的垃圾），而是启动即报错并给出三条补救路径；长度或 base64 不合法同样直接拒绝。想自己托管就设 `FEEDWATCH_WEBUI_SECRET_KEY`（标准 base64 的 32 字节），它覆盖密钥文件，**设过之后不要再换**。
 - 新用户新增订阅从当前全局 seen 集合建立基线，**不会补发历史版本**；删除后重新订阅也一样。
+- **订阅中心里的目录只是模板**：`catalog_categories` / `catalog_entries` / `submissions` 三张表，`category_id IS NULL` 表示「未分类」。一键订阅把目录里的 URL 复制成用户自己的一份订阅，之后编辑、停用、删除目录**都不会影响已订阅用户**。停用只是从订阅中心隐藏，仍占用 `url_key`（全局唯一索引含停用行），要释放 URL 必须删除条目。
+- 用户提交的新增 / 更新申请先进 `submissions`（`pending`），**只有管理员通过才写 `catalog_entries`**；驳回必须填理由，撤回保留 `withdrawn` 历史。更新申请在提交时用 `before_json` 存下当时的原值快照，审核页与「我的提交」直接展示改前 / 改后对比。`submissions` 行永不物理删除，带 `reviewed_by` / `reviewed_at` / `reject_reason`。
+- 目录 URL 会**展示给所有普通用户并允许复制**，因此入口校验比普通订阅更严：只允许 http/https，拒绝 userinfo 与含 `token` / `secret` / `key` / `password` / `auth` / `sig` 等敏感 query 键，长度上限 2048；对外响应还会再脱敏一次。已驳回的 URL 可以重新提交（唯一索引只对 `pending` 生效），每人最多 10 条待审申请。
+- 「目录管理 → 导入 / 导出」只搬运目录元数据（分类按名称匹配，不含 id），冲突策略有 `skip`（默认）/ `overwrite` / `error`（遇重复整体回滚）；导入**只写目录表**，绝不写 `subscriptions` / `feed_pool` / `user_seen`，也不含渠道凭据与投递状态。删除分类时该分类下的条目与申请统一改为「未分类」（外键 `ON DELETE SET NULL`，同一事务完成）。
 - 「全局设置」页可改轮询间隔、超时、并发、抓取/发送间隔、HTTP 参数等；服务端逐项校验后写库，**重启进程后生效**（不热更新）。
 - `webui.cookie_secure` / `webui.session_ttl` 是环境变量控制的只读项；`notify.mode` 在 WebUI 里不再有全局行，它是**账号级**偏好（`users.notify_mode`），在「通知方式」页顶部设置，对所有订阅与所有渠道一起生效。
 - 渠道表单由服务端下发：`GET /api/channel-fields` 返回每种渠道的字段表（键名、必填、类型、选项、是否密钥），前端按 schema 渲染。新增一种渠道只需改 `internal/webui/channelspec.go` 的 `ChannelFields`，页面不用动。
@@ -360,13 +368,16 @@ docker logs -f feedwatch-webui         # 首启随机管理员密码只在这里
 ### 通知语义
 
 - 同一 URL 全局每轮只抓一次（`url_key = sha256(规范化 URL)`），抓完按每个用户各自的过滤条件、`always` / `on_update` 分流。`digest` / `per_feed` 由账号决定而不是订阅：同一个用户的所有订阅共用一个形式，一轮里不会同时产出「汇总一条」和「每个项目一条」。
+- 订阅中心的「一键订阅」走和手动新增**完全相同**的三写事务（`subscriptions` + `feed_pool` + 复制当前 `user_seen` 基线），同样从当前基线开始、不会补发历史版本；因此它是「复制模板」，不是引用模板。目录显示「已订阅」按 `url_key` 判定，用户在「我的订阅」里改了 URL 之后，该目录卡片会重新显示为未订阅。
 - **不做跨用户合并**：每个用户 × 每个渠道一次独立请求，使用各自的凭据，这样每个用户都能在 Resend 等后台看到自己的发送记录。限速按**渠道类型**分别计算（email / telegram / wecom …各一个独立门），不同服务互不阻塞。
 - 渠道密钥**加密落库，运行期不读任何环境变量**。页面提交的是字段值本身，服务端 `Seal` 后写入 `channel_secrets`；列表与下钻接口只返回 `secret_fields`（哪些字段已配）、`secret_hints`（仅 `scheme://host`）和 `secret_state`（`ok` / `missing` / `error` / `none`），任何明文或 `fwsec:` 信封都不会出现在响应与日志里。编辑时**留空 = 保持不变**，要清除就显式传 `clear_secrets`；把密钥塞进普通字段会被 400 `secret_in_options` 拒绝。
 - 通知内容在抓取成功后就物化入库，投递失败只重试已渲染的投递组，不重新抓 feed、也不阻塞全局已见集合。
 
 ### 页面与本地开发
 
-页面：`/login`、概览、我的订阅、通知方式、账号设置；管理员另有用户管理（含单个用户下钻 `/admin/users/:id`，只读 + 启停）、轮询池、限速状态、全局设置、审计日志。普通用户看不到管理端入口，后端对他人资源一律返回 404。
+页面：`/login`、概览、我的订阅、**订阅中心 `/catalog`**、**审核中 `/catalog/pending`**、通知方式、账号设置；管理员另有用户管理（含单个用户下钻 `/admin/users/:id`，只读 + 启停）、**目录管理 `/admin/catalog`**、轮询池、限速状态、全局设置、审计日志。普通用户看不到管理端入口，管理员看不到订阅 / 渠道 / 订阅中心的入口，后端角色守卫双向拦截。
+
+订阅中心支持关键字（名称 / URL / 简介 / 分类名）、分类筛选与按订阅人数 / 名称 / 分类排序，卡片直接显示「已订阅」与取消入口；页面下方是「提交新订阅」和「我的提交」（状态、驳回理由、改前 / 改后对比、撤回）。审核中子页是只读的，只提供「复制信息」并常驻风险提示。目录管理页分五块：审核队列（含改前 / 改后对比、通过 / 驳回理由）、手动添加、目录条目表（编辑 / 停用 / 删除）、分类管理（添加 / 重命名 / 删除）、导入导出。搜索 / 筛选 / 排序目前是**前端本地**计算（一次返回全量目录），与现有列表页范式一致。
 
 ```bash
 make build-webui                 # 或 sh web/build.sh，产物写入 internal/webui/embedded/（已 gitignore）
@@ -399,6 +410,17 @@ WebUI 变体**不接受 `-config`**：传了只会记一条 `-config is ignored;
 ### 从 1.0 及更早的 WebUI 升级
 
 1.1.0 起不再读 `config.yaml`，渠道密钥改为页面填写 + 加密落库。旧库能直接打开（`PRAGMA user_version` 从 1 迁到 2，只新增 `channel_secrets` 等表，不动旧数据），但**旧渠道里存的还是环境变量名 / 占位符，无法自动转成密文**，需要在「通知方式」页把凭据重填一次，否则 `secret_state` 会显示 `missing`、投递报缺少凭据。
+
+`PRAGMA user_version` 的迁移是累加式的，每一步只补表 / 补列，不重建已有表、不动业务数据：
+
+| schema 版本 | 变化 |
+| --- | --- |
+| v2 | `channel_secrets` 等渠道密钥表 |
+| v3 | `users.timezone`（账号显示时区） |
+| v4 | `users.notify_mode`（通知形式改为账号级）；老库残留的 `subscriptions.mode` 列不读不写 |
+| v5 | `catalog_categories` / `catalog_entries` / `submissions`（订阅中心） |
+
+v5 **只新增三张表**，老库升级后不会自动获得示例目录（种子只在 `users` 为空时执行）；想预置示例，可在「目录管理 → 导入」加载一份从新库导出的 JSON。其余功能升级后直接可用，无需手工改数据。备份时数据库与 `secret.key` 一起带上即可，目录数据就在同一个库里。
 
 不想保留旧数据就干脆删卷重来（`docker compose -f docker-compose.webui.yml down -v`），首启会重新生成管理员密码与新密钥。**`data/` 卷与 `secret.key` 必须同进同退**，只留其一没有任何意义。
 
@@ -447,7 +469,7 @@ docker logs fw-rc     # 空库首启：master key、admin 密码、listening
 docker rm -f fw-rc
 ```
 
-检查项：首启能拿到一次性管理员密码并完成首登改密 → 建普通用户 → 在页面上建渠道（含密钥）→ 触发一轮抓取与投递 → 投递记录与 `secret_state` 符合预期。base 变体则用 `-once -dry-run` 跑一遍配置解析与渲染。**升过级的旧数据要单独验**：拿一份旧卷副本挂上去，确认能启动、渠道凭据按文档重填后能发出去。
+检查项：首启能拿到一次性管理员密码并完成首登改密 → 建普通用户 → 订阅中心能看到示例目录 → 一键订阅后「我的订阅」出现且没有补发历史 → 提交新增 / 更新申请 → 「审核中」页显示风险提示与改前 / 改后对比、可复制 → 管理员在目录管理里通过 / 驳回、分类增删、导出导入 → 用户侧状态与驳回理由正确 → 在页面上建渠道（含密钥）→ 触发一轮抓取与投递 → 投递记录与 `secret_state` 符合预期。base 变体则用 `-once -dry-run` 跑一遍配置解析与渲染。**升过级的旧数据要单独验**：拿一份旧卷副本挂上去，确认能启动、v5 只补出三张目录表、渠道凭据按文档重填后能发出去。
 
 **③ 发现问题就发下一个 rc**：改代码 → 新提交 → `v1.2.3-rc.2`。**不要重推同名 rc tag**：GHCR 上的同名 tag 会被覆盖，已经拉过 `rc.1` 的人将无法复现当时的镜像。
 
@@ -550,13 +572,14 @@ internal/store/               StateStore 接口 / Registry
 internal/store/jsonfile/      JSON 原子写状态 + 启动期可写性预检
 internal/watcher/             base 核心编排：有界并发抓取 → 过滤 → diff → 分批通知 → 按批次提交（webui 不改动它）
 internal/webui/               WebUI 变体（全部 //go:build webui）：首启只建 admin、渠道字段表、URL 规范化、embed 资源
+internal/webui/catalogspec.go 订阅目录的字段上限、URL 安全校验、内置示例、导入导出结构（Go 侧唯一真源）
 internal/webui/secrets/       主密钥加载与 AES-256-GCM 信封加密（唯一知道密钥的包）
-internal/webui/store/         SQLite 建表/迁移/WAL/目录可写性预检（schema.sql 一次建全）
+internal/webui/store/         SQLite 建表/迁移/WAL/目录可写性预检（schema v5，含三张目录表）
 internal/webui/auth/          bcrypt 密码、session、CSRF
-internal/webui/api/           HTTP server、中间件链、/api/* 端点与 SPA 静态服务
+internal/webui/api/           HTTP server、中间件链、/api/* 端点与 SPA 静态服务；catalog.go / catalog_admin.go 是订阅中心
 internal/webui/orchestrator/  多租户轮询：URL 去重池、每用户策略分流、独立投递与按渠道类型限速
 internal/webui/embedded/      只提交 stub.html / .gitkeep，真实产物由构建生成且 gitignore
-web/                         Vue 3 + Vite + TS 源码，构建脚本 build.sh / build.ps1
+web/                         Vue 3 + Vite + TS 源码；CatalogView / CatalogPendingView / AdminCatalogView 与 build.sh / build.ps1
 testdata/                     测试用 feed 夹具
 ```
 
@@ -593,6 +616,8 @@ sh web/build.sh                 # 生成前端资源后才能看到真实页面�
 
 WebUI 专项用例另覆盖：bcrypt / session / CSRF 与 cookie 属性、越权与跨用户数据隔离、URL 去重只抓一次、`always` / `on_update` 分流、每用户独立投递与按渠道类型限速、投递失败重试与放弃、管理端设置校验与审计、静态资源头与未知 `/api/*` 的 JSON 404。密钥链路单独测：信封往返与随机 nonce、密文 / AAD 篡改、未知前缀、长度 31 / 33 拒绝、`LoadOrCreate` 建 0600 文件且**不覆盖**已存在的损坏文件、环境变量优先、坏 base64 不落盘；接口层断言创建的密钥落库为 `fwsec:v1:` 且任何响应里都没有明文、留空编辑保持不变、管理员下钻只读（多传字段即 400）、种子只建 admin 且业务表全 0。两种构建都跑同一套 base 回归，保证 WebUI 改动不污染 base 行为。
 
+订阅中心专项用例：v4→v5 迁移只补三张表且保留用户数据、外键 `ON DELETE SET NULL`、pending 部分唯一索引（驳回 / 撤回后可重提）、示例目录只是模板（不写 `subscriptions` / `feed_pool` / `user_seen`）、目录 URL 的协议 / userinfo / 敏感 query / 长度与别名归一化校验、admin 与 member 的双向角色守卫、**一键订阅复制基线不重放历史**、去重防刷与待审上限、新增与更新两类审核流（含 `before_json` 快照、`entry_gone` / `conflict_url`）、撤回、驳回理由可见、分类删除级联、管理员手动编辑不产生申请、导入导出往返与三种冲突策略。改前端后还要在 `web/` 目录下跑 `npm run typecheck`，并重新执行构建脚本再 `go build -tags webui`。
+
 改 workflow 后建议跑一次静态检查（需自行安装 `go install github.com/rhysd/actionlint/cmd/actionlint@latest`）：
 
 ```bash
@@ -610,3 +635,5 @@ actionlint .github/workflows/docker-publish.yml
 - 状态文件损坏时程序会报错并跳过该轮，**不会**静默当作首轮重发基线邮件；需人工检查 `data/state.json`。
 - WebUI 的「全局设置」写入数据库后需**重启进程**才生效；`FEEDWATCH_WEBUI_COOKIE_SECURE` / `FEEDWATCH_WEBUI_SESSION_TTL` 只在启动时读环境变量，页面里标为只读。
 - WebUI 变体的 `-dry-run` 无意义（会被忽略并记一条日志），`-once` 只跑一轮「抓取 → 生成投递计划 → 投递」后退出。
+- 订阅中心的搜索 / 筛选 / 排序是浏览器对一次返回的全量目录做本地计算；目录量级显著变大后需改成后端分页，并**同时移除本地过滤**（否则只会过滤当前页）。
+- 「审核中」页会把待审 URL 明文展示给全体普通用户并允许复制，所以目录 URL 的 http/https、无 userinfo、无敏感 query 校验**不能放宽**；FeedWatch 不验证这些链接的内容、可用性与安全性，手动复制添加前需自行判断。

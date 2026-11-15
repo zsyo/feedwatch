@@ -37,6 +37,15 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("PATCH /api/channels/{id}", s.handle(accessMember, false, s.updateChannel))
 	mux.Handle("DELETE /api/channels/{id}", s.handle(accessMember, false, s.deleteChannel))
 
+	// Subscription center: a browsable template catalog plus user proposals.
+	// Like subscriptions themselves, these are member-only resources.
+	mux.Handle("GET /api/catalog", s.handle(accessMember, false, s.listCatalog))
+	mux.Handle("GET /api/catalog/pending", s.handle(accessMember, false, s.listPendingSubmissions))
+	mux.Handle("GET /api/catalog/submissions/mine", s.handle(accessMember, false, s.mySubmissions))
+	mux.Handle("POST /api/catalog/submissions", s.handle(accessMember, false, s.createSubmission))
+	mux.Handle("DELETE /api/catalog/submissions/{id}", s.handle(accessMember, false, s.withdrawSubmission))
+	mux.Handle("POST /api/catalog/{id}/subscribe", s.handle(accessMember, false, s.quickSubscribe))
+
 	// Admin only
 	mux.Handle("GET /api/admin/users", s.handle(accessAdmin, false, s.listUsers))
 	mux.Handle("POST /api/admin/users", s.handle(accessAdmin, false, s.createUser))
@@ -55,6 +64,21 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("GET /api/admin/audit", s.handle(accessAdmin, false, s.adminAudit))
 	mux.Handle("GET /api/admin/settings", s.handle(accessAdmin, false, s.adminGetSettings))
 	mux.Handle("PUT /api/admin/settings", s.handle(accessAdmin, false, s.adminPutSettings))
+
+	// Catalog administration: direct CRUD, review queue, categories, transfer.
+	mux.Handle("GET /api/admin/catalog", s.handle(accessAdmin, false, s.adminListCatalog))
+	mux.Handle("POST /api/admin/catalog", s.handle(accessAdmin, false, s.adminCreateEntry))
+	mux.Handle("PATCH /api/admin/catalog/{id}", s.handle(accessAdmin, false, s.adminUpdateEntry))
+	mux.Handle("DELETE /api/admin/catalog/{id}", s.handle(accessAdmin, false, s.adminDeleteEntry))
+	mux.Handle("GET /api/admin/catalog/submissions", s.handle(accessAdmin, false, s.adminListSubmissions))
+	mux.Handle("POST /api/admin/catalog/submissions/{id}/approve", s.handle(accessAdmin, false, s.approveSubmission))
+	mux.Handle("POST /api/admin/catalog/submissions/{id}/reject", s.handle(accessAdmin, false, s.rejectSubmission))
+	mux.Handle("GET /api/admin/catalog/categories", s.handle(accessAdmin, false, s.listCategories))
+	mux.Handle("POST /api/admin/catalog/categories", s.handle(accessAdmin, false, s.createCategory))
+	mux.Handle("PATCH /api/admin/catalog/categories/{id}", s.handle(accessAdmin, false, s.renameCategory))
+	mux.Handle("DELETE /api/admin/catalog/categories/{id}", s.handle(accessAdmin, false, s.deleteCategory))
+	mux.Handle("GET /api/admin/catalog/export", s.handle(accessAdmin, false, s.exportCatalog))
+	mux.Handle("POST /api/admin/catalog/import", s.handle(accessAdmin, false, s.importCatalog))
 
 	// Unknown /api/* paths must be JSON 404s for every method. A single method-
 	// less "/api/" pattern would overlap "GET /" without being a strict subset,

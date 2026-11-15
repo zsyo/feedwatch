@@ -88,13 +88,15 @@ onMounted(load)
         <p class="card-sub">创建普通用户、查看轮询池与投递状态。用户的订阅与通知只能启停，不能代改。</p>
         <div class="form-actions">
           <RouterLink to="/admin/users" class="link-button">用户管理</RouterLink>
+          <RouterLink to="/admin/catalog" class="link-button">目录管理</RouterLink>
           <RouterLink to="/admin/pool" class="link-button">轮询池</RouterLink>
           <RouterLink to="/admin/ratelimit" class="link-button">限速状态</RouterLink>
         </div>
       </template>
       <template v-else>
-        <p class="card-sub">订阅一个 release.atom 地址，再配置一种通知方式即可开始接收更新。</p>
+        <p class="card-sub">在订阅中心挑一个现成的 release.atom 一键订阅，或手动填地址；再配置一种通知方式即可开始接收更新。</p>
         <div class="form-actions">
+          <RouterLink to="/catalog" class="link-button">去订阅中心</RouterLink>
           <RouterLink to="/subscriptions" class="link-button">管理订阅</RouterLink>
           <RouterLink to="/channels" class="link-button">管理通知方式</RouterLink>
         </div>

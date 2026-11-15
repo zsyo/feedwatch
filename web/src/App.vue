@@ -15,6 +15,7 @@ const onLogin = computed(() => route.name === 'login')
 const adminNav = [
   { to: '/', label: '概览' },
   { to: '/admin/users', label: '用户管理' },
+  { to: '/admin/catalog', label: '目录管理' },
   { to: '/admin/pool', label: '轮询池' },
   { to: '/admin/ratelimit', label: '限速状态' },
   { to: '/admin/settings', label: '全局设置' },
@@ -24,6 +25,8 @@ const adminNav = [
 const memberNav = [
   { to: '/', label: '概览' },
   { to: '/subscriptions', label: '我的订阅' },
+  { to: '/catalog', label: '订阅中心' },
+  { to: '/catalog/pending', label: '审核中' },
   { to: '/channels', label: '通知方式' },
   { to: '/settings', label: '账号设置' },
 ]

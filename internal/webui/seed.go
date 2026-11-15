@@ -23,14 +23,19 @@ type SeedResult struct {
 	Password string
 }
 
-// Seed creates the very first administrator, and nothing else.
+// Seed creates the very first administrator plus the built-in example catalog.
 //
-// A fresh WebUI database is intentionally empty: no subscriptions, no
-// notification channels, no baseline notification. The administrator is an
+// A fresh WebUI database is intentionally empty of real data: no subscriptions,
+// no notification channels, no baseline notification. The administrator is an
 // operations role (users, global settings, read-only data); anyone who wants to
-// subscribe creates a regular user account and configures it from there.
+// subscribe creates a regular user account and configures it from there. The
+// example catalog is metadata (browsable templates), not a subscription: it is
+// written so the subscription center is not blank on first login, and it never
+// creates a feed_pool or user_seen row.
 //
 // The gate is "users table is empty", so this runs exactly once per database.
+// Databases upgraded from an earlier version keep their existing users and
+// therefore do not gain the examples; an administrator can import them.
 func Seed(st *store.Store, log *slog.Logger) (SeedResult, error) {
 	if log == nil {
 		log = slog.Default()
@@ -65,6 +70,9 @@ func Seed(st *store.Store, log *slog.Logger) (SeedResult, error) {
 		return SeedResult{}, fmt.Errorf("webui: create admin: %w", err)
 	}
 	if err := seedSettings(tx, now); err != nil {
+		return SeedResult{}, err
+	}
+	if err := seedCatalogExamples(tx, now); err != nil {
 		return SeedResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -109,6 +117,34 @@ func seedSettings(tx *sql.Tx, now string) error {
 	for k, v := range settings {
 		if _, err := tx.Exec(`INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,?)`, k, v, now); err != nil {
 			return fmt.Errorf("webui: seed setting %q: %w", k, err)
+		}
+	}
+	return nil
+}
+
+// seedCatalogExamples fills the subscription center on a brand-new database.
+// Everything is INSERT OR IGNORE (categories by name, entries by url_key) so a
+// repeated seed, or an administrator who already edited an example, is left
+// alone. Only the three catalog tables are touched: a template must never turn
+// into a real subscription or a polling-pool row.
+func seedCatalogExamples(tx *sql.Tx, now string) error {
+	for _, name := range ExampleCategoryNames() {
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO catalog_categories (name, created_at, updated_at) VALUES (?,?,?)`,
+			name, now, now); err != nil {
+			return fmt.Errorf("webui: seed catalog category %q: %w", name, err)
+		}
+	}
+	for _, e := range ExampleCatalog {
+		normalized, key, err := CatalogURLKey(e.URL)
+		if err != nil {
+			return fmt.Errorf("webui: seed catalog entry %q: %w", e.Name, err)
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO catalog_entries
+			(url, url_key, name, category_id, description, homepage, source_type, enabled, created_by, created_at, updated_at)
+			VALUES (?,?,?,(SELECT id FROM catalog_categories WHERE name=?),?,?,'atom',1,NULL,?,?)`,
+			normalized, key, e.Name, e.Category, e.Description, e.Homepage, now, now); err != nil {
+			return fmt.Errorf("webui: seed catalog entry %q: %w", e.Name, err)
 		}
 	}
 	return nil

@@ -1,4 +1,4 @@
--- FeedWatch WebUI schema, version 4.
+-- FeedWatch WebUI schema, version 5.
 -- Every statement is IF NOT EXISTS, so running this on an older database only
 -- adds the tables it is missing. Adding a COLUMN to an existing table is not
 -- covered by this file: migrate.go carries those as explicit ALTER TABLE steps.
@@ -170,3 +170,70 @@ CREATE TABLE IF NOT EXISTS audit_log (
   ip           TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
+
+-- ===== Subscription catalog (v5) =====
+-- The catalog is a browsable set of TEMPLATES, not anybody's subscription.
+-- "Subscribe" copies an entry into the user's own subscriptions row; disabling
+-- or deleting an entry here never touches subscriptions, feed_pool or user_seen.
+
+CREATE TABLE IF NOT EXISTS catalog_categories (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL UNIQUE,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+
+-- Only approved, browsable templates live here. NULL category_id means
+-- "uncategorized": there is deliberately no sentinel row to rename or delete.
+CREATE TABLE IF NOT EXISTS catalog_entries (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  url          TEXT NOT NULL,
+  url_key      TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  category_id  INTEGER REFERENCES catalog_categories(id) ON DELETE SET NULL,
+  description  TEXT NOT NULL DEFAULT '',
+  homepage     TEXT NOT NULL DEFAULT '',
+  source_type  TEXT NOT NULL DEFAULT 'atom',
+  enabled      INTEGER NOT NULL DEFAULT 1,
+  created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+-- Disabled entries still claim their URL: re-enable instead of re-submitting.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_catalog_entries_url_key ON catalog_entries(url_key);
+CREATE INDEX IF NOT EXISTS idx_catalog_entries_category ON catalog_entries(category_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_entries_enabled ON catalog_entries(enabled, id);
+
+-- Every user submission (new entry or an update to an existing one). Rows are
+-- review history: they are never deleted, and only approval writes to the
+-- catalog. before_json snapshots the entry at submission time so a reviewer
+-- can compare the old values with the proposed ones in this row.
+CREATE TABLE IF NOT EXISTS submissions (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind          TEXT NOT NULL CHECK (kind IN ('new', 'update')),
+  -- "withdrawn" is a submission its own author pulled back before review;
+  -- it is kept as history, like approved/rejected rows.
+  status        TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending', 'approved', 'rejected', 'withdrawn')),
+  entry_id      INTEGER REFERENCES catalog_entries(id) ON DELETE SET NULL,
+  url           TEXT NOT NULL,
+  url_key       TEXT NOT NULL,
+  name          TEXT NOT NULL,
+  category_id   INTEGER REFERENCES catalog_categories(id) ON DELETE SET NULL,
+  description   TEXT NOT NULL DEFAULT '',
+  homepage      TEXT NOT NULL DEFAULT '',
+  before_json   TEXT NOT NULL DEFAULT '',
+  submitted_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reject_reason TEXT NOT NULL DEFAULT '',
+  reviewed_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at   TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+-- At most one pending proposal per URL, whatever its kind. Historical
+-- approved/rejected rows may repeat a url_key.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_submissions_pending_url
+  ON submissions(url_key) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status, id);
+CREATE INDEX IF NOT EXISTS idx_submissions_user ON submissions(submitted_by, id);
+CREATE INDEX IF NOT EXISTS idx_submissions_entry ON submissions(entry_id);

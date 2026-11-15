@@ -13,6 +13,9 @@ import AdminPoolView from './views/AdminPoolView.vue'
 import AdminRateLimitView from './views/AdminRateLimitView.vue'
 import AdminSettingsView from './views/AdminSettingsView.vue'
 import AdminAuditView from './views/AdminAuditView.vue'
+import CatalogView from './views/CatalogView.vue'
+import CatalogPendingView from './views/CatalogPendingView.vue'
+import AdminCatalogView from './views/AdminCatalogView.vue'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -34,7 +37,12 @@ const router = createRouter({
     { path: '/subscriptions', name: 'subscriptions', component: SubscriptionsView, meta: { member: true } },
     { path: '/channels', name: 'channels', component: ChannelsView, meta: { member: true } },
     { path: '/settings', name: 'settings', component: SettingsView },
+    // The subscription center is a member-only resource: an administrator may
+    // manage the catalog but cannot subscribe, so /admin/catalog is separate.
+    { path: '/catalog', name: 'catalog', component: CatalogView, meta: { member: true } },
+    { path: '/catalog/pending', name: 'catalog-pending', component: CatalogPendingView, meta: { member: true } },
     { path: '/admin/users', name: 'admin-users', component: AdminUsersView, meta: { admin: true } },
+    { path: '/admin/catalog', name: 'admin-catalog', component: AdminCatalogView, meta: { admin: true } },
     { path: '/admin/users/:id', name: 'admin-user-detail', component: AdminUserDetailView, meta: { admin: true } },
     { path: '/admin/pool', name: 'admin-pool', component: AdminPoolView, meta: { admin: true } },
     { path: '/admin/ratelimit', name: 'admin-ratelimit', component: AdminRateLimitView, meta: { admin: true } },

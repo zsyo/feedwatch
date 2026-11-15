@@ -16,7 +16,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 func migrate(db *sql.DB) error {
 	var version int
@@ -54,6 +54,9 @@ func migrate(db *sql.DB) error {
 		"TEXT NOT NULL DEFAULT 'digest' CHECK (notify_mode IN ('digest', 'per_feed'))"); err != nil {
 		return err
 	}
+	// v5 adds the three catalog tables. They are whole new tables, so the
+	// IF NOT EXISTS statements above cover both a fresh database and a v4
+	// upgrade; no incremental ALTER step is needed for them.
 	// PRAGMA cannot be parameterized, but the value is a compile-time constant.
 	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		return fmt.Errorf("webui: set schema version: %w", err)
