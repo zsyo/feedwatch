@@ -1,0 +1,61 @@
+{
+  "format": "feedwatch-presets-category",
+  "format_version": 1,
+  "category": "开发与运维",
+  "presets": [
+    {
+      "preset_key": "devops-containerd",
+      "version": 1,
+      "name": "containerd",
+      "url": "https://github.com/containerd/containerd/releases.atom",
+      "description": "容器运行时 containerd 的版本发布。",
+      "homepage": "https://github.com/containerd/containerd",
+      "enabled": true
+    },
+    {
+      "preset_key": "devops-terraform",
+      "version": 1,
+      "name": "Terraform",
+      "url": "https://github.com/hashicorp/terraform/releases.atom",
+      "description": "基础设施即代码工具 Terraform 的发布动态。",
+      "homepage": "https://github.com/hashicorp/terraform",
+      "enabled": true
+    },
+    {
+      "preset_key": "devops-prometheus",
+      "version": 1,
+      "name": "Prometheus",
+      "url": "https://github.com/prometheus/prometheus/releases.atom",
+      "description": "监控与告警系统 Prometheus 的版本发布。",
+      "homepage": "https://github.com/prometheus/prometheus",
+      "enabled": true
+    },
+    {
+      "preset_key": "devops-grafana",
+      "version": 1,
+      "name": "Grafana",
+      "url": "https://github.com/grafana/grafana/releases.atom",
+      "description": "可视化平台 Grafana 的版本发布。",
+      "homepage": "https://github.com/grafana/grafana",
+      "enabled": true
+    },
+    {
+      "preset_key": "devops-gitea",
+      "version": 1,
+      "name": "Gitea",
+      "url": "https://github.com/go-gitea/gitea/releases.atom",
+      "description": "轻量级自托管 Git 服务 Gitea 的发布动态。",
+      "homepage": "https://github.com/go-gitea/gitea",
+      "enabled": true
+    },
+    {
+      "preset_key": "devops-kubernetes",
+      "version": 1,
+      "name": "Kubernetes",
+      "url": "https://github.com/kubernetes/kubernetes/releases.atom",
+      "description": "Kubernetes 主仓库的版本标签与发布说明。",
+      "homepage": "https://github.com/kubernetes/kubernetes",
+      "enabled": true
+    }
+  ]
+}

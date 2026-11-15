@@ -1,0 +1,61 @@
+{
+  "format": "feedwatch-presets-category",
+  "format_version": 1,
+  "category": "命令行工具",
+  "presets": [
+    {
+      "preset_key": "cli-ripgrep",
+      "version": 1,
+      "name": "ripgrep",
+      "url": "https://github.com/BurntSushi/ripgrep/releases.atom",
+      "description": "跨平台高速文本搜索工具 ripgrep 的发布动态。",
+      "homepage": "https://github.com/BurntSushi/ripgrep",
+      "enabled": true
+    },
+    {
+      "preset_key": "cli-fd",
+      "version": 1,
+      "name": "fd",
+      "url": "https://github.com/sharkdp/fd/releases.atom",
+      "description": "find 的现代化替代品 fd 的版本发布。",
+      "homepage": "https://github.com/sharkdp/fd",
+      "enabled": true
+    },
+    {
+      "preset_key": "cli-fzf",
+      "version": 1,
+      "name": "fzf",
+      "url": "https://github.com/junegunn/fzf/releases.atom",
+      "description": "命令行模糊查找器 fzf 的发布动态。",
+      "homepage": "https://github.com/junegunn/fzf",
+      "enabled": true
+    },
+    {
+      "preset_key": "cli-gh",
+      "version": 1,
+      "name": "GitHub CLI",
+      "url": "https://github.com/cli/cli/releases.atom",
+      "description": "GitHub 官方命令行工具 gh 的版本发布。",
+      "homepage": "https://github.com/cli/cli",
+      "enabled": true
+    },
+    {
+      "preset_key": "cli-bat",
+      "version": 1,
+      "name": "bat",
+      "url": "https://github.com/sharkdp/bat/releases.atom",
+      "description": "带语法高亮的 cat 替代品 bat 的发布动态。",
+      "homepage": "https://github.com/sharkdp/bat",
+      "enabled": true
+    },
+    {
+      "preset_key": "cli-jq",
+      "version": 1,
+      "name": "jq",
+      "url": "https://github.com/jqlang/jq/releases.atom",
+      "description": "JSON 处理工具 jq 的版本发布。",
+      "homepage": "https://github.com/jqlang/jq",
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "format": "feedwatch-presets-category",
+  "format_version": 1,
+  "category": "编辑器",
+  "presets": [
+    {
+      "preset_key": "editor-neovim",
+      "version": 1,
+      "name": "Neovim",
+      "url": "https://github.com/neovim/neovim/releases.atom",
+      "description": "Neovim 编辑器的稳定版与预发布动态。",
+      "homepage": "https://github.com/neovim/neovim",
+      "enabled": true
+    },
+    {
+      "preset_key": "editor-helix",
+      "version": 1,
+      "name": "Helix",
+      "url": "https://github.com/helix-editor/helix/releases.atom",
+      "description": "模态编辑器 Helix 的版本发布。",
+      "homepage": "https://github.com/helix-editor/helix",
+      "enabled": true
+    },
+    {
+      "preset_key": "editor-vscode",
+      "version": 1,
+      "name": "Visual Studio Code",
+      "url": "https://github.com/microsoft/vscode/releases.atom",
+      "description": "VS Code 编辑器仓库的发布动态。",
+      "homepage": "https://github.com/microsoft/vscode",
+      "enabled": true
+    },
+    {
+      "preset_key": "editor-zed",
+      "version": 1,
+      "name": "Zed",
+      "url": "https://github.com/zed-industries/zed/releases.atom",
+      "description": "高性能协作编辑器 Zed 的发布动态。",
+      "homepage": "https://github.com/zed-industries/zed",
+      "enabled": true
+    }
+  ]
+}

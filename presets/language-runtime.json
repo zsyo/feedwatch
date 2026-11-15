@@ -1,0 +1,61 @@
+{
+  "format": "feedwatch-presets-category",
+  "format_version": 1,
+  "category": "语言与运行时",
+  "presets": [
+    {
+      "preset_key": "lang-nodejs",
+      "version": 1,
+      "name": "Node.js",
+      "url": "https://github.com/nodejs/node/releases.atom",
+      "description": "Node.js 官方仓库的发布动态，包含 LTS 与 Current 版本。",
+      "homepage": "https://github.com/nodejs/node",
+      "enabled": true
+    },
+    {
+      "preset_key": "lang-deno",
+      "version": 1,
+      "name": "Deno",
+      "url": "https://github.com/denoland/deno/releases.atom",
+      "description": "Deno 运行时与工具链的版本发布。",
+      "homepage": "https://github.com/denoland/deno",
+      "enabled": true
+    },
+    {
+      "preset_key": "lang-bun",
+      "version": 1,
+      "name": "Bun",
+      "url": "https://github.com/oven-sh/bun/releases.atom",
+      "description": "Bun 运行时、打包器与测试运行器的发布动态。",
+      "homepage": "https://github.com/oven-sh/bun",
+      "enabled": true
+    },
+    {
+      "preset_key": "lang-golang",
+      "version": 1,
+      "name": "Go",
+      "url": "https://github.com/golang/go/releases.atom",
+      "description": "Go 语言官方仓库的版本标签与发布说明。",
+      "homepage": "https://github.com/golang/go",
+      "enabled": true
+    },
+    {
+      "preset_key": "lang-rust",
+      "version": 1,
+      "name": "Rust",
+      "url": "https://github.com/rust-lang/rust/releases.atom",
+      "description": "Rust 编译器与工具链的版本发布。",
+      "homepage": "https://github.com/rust-lang/rust",
+      "enabled": true
+    },
+    {
+      "preset_key": "lang-cpython",
+      "version": 1,
+      "name": "CPython",
+      "url": "https://github.com/python/cpython/releases.atom",
+      "description": "CPython 解释器的版本标签与发布说明。",
+      "homepage": "https://github.com/python/cpython",
+      "enabled": true
+    }
+  ]
+}

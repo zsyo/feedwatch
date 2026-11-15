@@ -1,0 +1,10 @@
+{
+  "format": "feedwatch-presets",
+  "format_version": 1,
+  "files": [
+    { "name": "language-runtime.json", "category": "语言与运行时" },
+    { "name": "cli-tools.json", "category": "命令行工具" },
+    { "name": "editors.json", "category": "编辑器" },
+    { "name": "devops.json", "category": "开发与运维" }
+  ]
+}
