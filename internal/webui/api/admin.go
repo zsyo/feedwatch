@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"feedwatch/internal/webui"
+	"feedwatch/internal/webui/presets"
 	"feedwatch/internal/webui/store"
 )
 
@@ -93,6 +94,16 @@ var editableSettings = map[string]settingRule{
 		summary: "用 ETag / 304 减少重复下载", def: "true",
 		detail: "开启后复用上次的 ETag 与 Last-Modified，内容没变时上游返回 304，既省流量也省时间。只有在怀疑上游对条件请求返回了错误内容时才需要关掉。",
 	},
+	"presets.base_url": {
+		kind: "preset_url", maxLen: 2048,
+		summary: "远程预设数据的地址", def: webui.DefaultPresetBaseURL,
+		detail: "「目录管理 → 获取远程预设数据」从这个地址读取 manifest.json 与各分类 JSON。国内访问不了 raw.githubusercontent.com 时可改成镜像地址；只允许 https、443 端口、无账号密码与查询串，解析到内网的域名会被拒绝。和轮询类参数一样，保存后需重启进程生效。",
+	},
+	"presets.timeout": {
+		kind: "duration", min: int64(time.Second), max: int64(2 * time.Minute),
+		summary: "拉取远程预设的超时", def: webui.DefaultPresetTimeout,
+		detail: "一次「获取远程预设数据」全部文件的总时限，与 http.timeout 相互独立（后者管单个 feed 抓取）。任一文件超时或失败都会整体回滚，不会写入半套目录。保存后需重启进程生效。",
+	},
 }
 
 var envOnlySettings = []string{"webui.cookie_secure", "webui.session_ttl"}
@@ -140,6 +151,8 @@ func settingFormat(rule settingRule) string {
 		return fmt.Sprintf("整数；范围 %d ~ %d", rule.min, rule.max)
 	case "bool":
 		return "true 或 false"
+	case "preset_url":
+		return fmt.Sprintf("HTTPS 地址，最长 %d 字符；仅 443 端口、无账号密码与查询串", rule.maxLen)
 	default:
 		return fmt.Sprintf("文本，最长 %d 字符", rule.maxLen)
 	}
@@ -191,6 +204,18 @@ func validateSetting(key, value string) error {
 		}
 		if strings.ContainsAny(value, "\r\n\x00") {
 			return fmt.Errorf("%s 不能包含换行或控制字符", key)
+		}
+	case "preset_url":
+		// A new kind MUST have its own case: the switch has no default branch,
+		// so an unhandled kind would silently accept anything.
+		if len(value) > rule.maxLen {
+			return fmt.Errorf("%s 最长 %d 字符", key, rule.maxLen)
+		}
+		if strings.ContainsAny(value, "\r\n\x00") {
+			return fmt.Errorf("%s 不能包含换行或控制字符", key)
+		}
+		if err := presets.ValidateBaseURL(value); err != nil {
+			return fmt.Errorf("%s 不是合法的 HTTPS 预设地址：%v", key, err)
 		}
 	}
 	return nil

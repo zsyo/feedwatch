@@ -232,3 +232,12 @@ func ValidImportStrategy(strategy string) bool {
 		return false
 	}
 }
+
+// Defaults for the remote catalog presets. These are WebUI-only: the base
+// variant never reads them, so config.Default() and config.example.yaml stay
+// untouched. seedSettings, the settings-page docs and the composition root all
+// share these constants (pinned by TestPresetSettingDefaultsMatchSeed).
+const (
+	DefaultPresetBaseURL = "https://raw.githubusercontent.com/zsyo/feedwatch/main/presets"
+	DefaultPresetTimeout = "15s"
+)

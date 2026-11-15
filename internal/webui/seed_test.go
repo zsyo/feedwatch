@@ -21,6 +21,27 @@ func openTestStore(t *testing.T) *store.Store {
 	return s
 }
 
+// The remote preset knobs are WebUI-only: they are seeded from the shared
+// constants in this package, not from config.Default().
+func TestSeedWritesPresetDefaults(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := Seed(s, nil); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"presets.base_url": DefaultPresetBaseURL,
+		"presets.timeout":  DefaultPresetTimeout,
+	} {
+		var got string
+		if err := s.DB().QueryRow(`SELECT value FROM settings WHERE key=?`, key).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("seeded %s = %q, want %q", key, got, want)
+		}
+	}
+}
+
 func TestSeedCreatesOnlyTheAdministrator(t *testing.T) {
 	s := openTestStore(t)
 	first, err := Seed(s, nil)

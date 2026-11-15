@@ -21,6 +21,7 @@ import (
 	"feedwatch/internal/webui/api"
 	"feedwatch/internal/webui/auth"
 	"feedwatch/internal/webui/orchestrator"
+	"feedwatch/internal/webui/presets"
 	"feedwatch/internal/webui/secrets"
 	"feedwatch/internal/webui/store"
 )
@@ -120,7 +121,19 @@ func runWebUI(cfgPath, logLevel, logFormat string, once, dryRun bool) error {
 		return fmt.Errorf("webui: load embedded assets: %w", err)
 	}
 	am := auth.New(st.DB(), ttl, secure)
-	srv := api.New(st, am, assets, log, version, sealer)
+
+	// The remote preset loader is built once from DB settings. Like the polling
+	// and delivery knobs, presets.* is read at startup, not hot-reloaded.
+	presetLoader := presets.NewLoader()
+	presetLoader.BaseURL = settings["presets.base_url"]
+	if presetLoader.BaseURL == "" {
+		presetLoader.BaseURL = webui.DefaultPresetBaseURL
+	}
+	presetLoader.Timeout = dur("presets.timeout", 15*time.Second)
+	if ua := settings["http.user_agent"]; ua != "" {
+		presetLoader.UserAgent = ua
+	}
+	srv := api.New(st, am, assets, log, version, sealer, api.WithPresetLoader(presetLoader))
 
 	if dryRun {
 		log.Info("webui: -dry-run is ignored; the WebUI variant has no dry-run poll mode")

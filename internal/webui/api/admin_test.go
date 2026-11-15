@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"feedwatch/internal/config"
+	"feedwatch/internal/webui"
 	"feedwatch/internal/webui/auth"
 	"feedwatch/internal/webui/store"
 )
@@ -168,6 +169,11 @@ func TestAdminSettingsValidationAndAtomicUpdate(t *testing.T) {
 		{"http.conditional": "maybe"},
 		{"notify.subject_prefix": "line\nbreak"},
 		{"poll.interval": "50m", "poll.concurrency": "999"}, // atomicity
+		{"presets.base_url": "http://example.com/presets"},
+		{"presets.base_url": "https://user:pass@example.com/presets"},
+		{"presets.base_url": "https://192.168.1.1/presets"},
+		{"presets.base_url": "https://example.com/presets?x=1"},
+		{"presets.timeout": "not-a-duration"},
 	}
 	for _, patch := range bad {
 		admin.do(http.MethodPut, "/api/admin/settings",
@@ -476,6 +482,27 @@ func TestSettingDefaultsMatchConfig(t *testing.T) {
 		}
 		if rule.def != expected {
 			t.Errorf("%s default = %q, config.Default = %q", key, rule.def, expected)
+		}
+	}
+}
+
+// TestPresetSettingDefaultsMatchSeed keeps the documented defaults, the
+// seeded values and the shared constants in sync. Unlike the polling knobs,
+// these two are WebUI-only and are not seeded by config.Default().
+func TestPresetSettingDefaultsMatchSeed(t *testing.T) {
+	for key, want := range map[string]string{
+		"presets.base_url": webui.DefaultPresetBaseURL,
+		"presets.timeout":  webui.DefaultPresetTimeout,
+	} {
+		rule, ok := editableSettings[key]
+		if !ok {
+			t.Fatalf("%s is not editable", key)
+		}
+		if rule.def != want {
+			t.Errorf("%s default = %q, want %q", key, rule.def, want)
+		}
+		if err := validateSetting(key, rule.def); err != nil {
+			t.Errorf("%s default fails validation: %v", key, err)
 		}
 	}
 }

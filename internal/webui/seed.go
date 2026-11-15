@@ -113,6 +113,8 @@ func seedSettings(tx *sql.Tx, now string) error {
 		"http.conditional":      strconv.FormatBool(cfg.HTTP.Conditional),
 		"webui.cookie_secure":   "false",
 		"webui.session_ttl":     "168h",
+		"presets.base_url":      DefaultPresetBaseURL,
+		"presets.timeout":       DefaultPresetTimeout,
 	}
 	for k, v := range settings {
 		if _, err := tx.Exec(`INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,?)`, k, v, now); err != nil {

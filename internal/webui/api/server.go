@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"feedwatch/internal/webui/auth"
+	"feedwatch/internal/webui/presets"
 	"feedwatch/internal/webui/secrets"
 	"feedwatch/internal/webui/store"
 )
@@ -26,25 +27,39 @@ type Ctx struct {
 }
 
 type Server struct {
-	db      *sql.DB
-	auth    *auth.Manager
-	assets  fs.FS
-	log     *slog.Logger
-	version string
-	buildID string
-	limiter *rateLimiter
-	sealer  *secrets.Sealer
+	db           *sql.DB
+	auth         *auth.Manager
+	assets       fs.FS
+	log          *slog.Logger
+	version      string
+	buildID      string
+	limiter      *rateLimiter
+	sealer       *secrets.Sealer
+	presetLoader *presets.Loader
 }
 
-func New(st *store.Store, am *auth.Manager, assets fs.FS, log *slog.Logger, version string, sealer *secrets.Sealer) *Server {
+// Option customises the Server at construction time. Variadic so every
+// existing six-argument call keeps working; tests use it to inject a loader
+// backed by a local TLS server instead of the real GitHub raw host.
+type Option func(*Server)
+
+func WithPresetLoader(l *presets.Loader) Option {
+	return func(s *Server) { s.presetLoader = l }
+}
+
+func New(st *store.Store, am *auth.Manager, assets fs.FS, log *slog.Logger, version string, sealer *secrets.Sealer, opts ...Option) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{
+	s := &Server{
 		db: st.DB(), auth: am, assets: assets, log: log,
 		version: version, buildID: readBuildID(assets), limiter: newRateLimiter(),
-		sealer: sealer,
+		sealer: sealer, presetLoader: presets.NewLoader(),
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Handler builds the full middleware chain. Public routes (login, meta, static)
