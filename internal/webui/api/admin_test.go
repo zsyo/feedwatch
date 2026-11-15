@@ -3,7 +3,6 @@
 package api
 
 import (
-	"database/sql"
 	"io"
 	"io/fs"
 	"net/http"
@@ -27,7 +26,7 @@ func stubAssets() fstest.MapFS {
 	}
 }
 
-func newAdminTestServer(t *testing.T, assets fs.FS) (*httptest.Server, *sql.DB) {
+func newAdminTestServer(t *testing.T, assets fs.FS) (*httptest.Server, *store.DB) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "feedwatch.db"), nil)
 	if err != nil {
@@ -43,7 +42,7 @@ func newAdminTestServer(t *testing.T, assets fs.FS) (*httptest.Server, *sql.DB) 
 	return ts, db
 }
 
-func mustExec(t *testing.T, db *sql.DB, query string, args ...any) {
+func mustExec(t *testing.T, db *store.DB, query string, args ...any) {
 	t.Helper()
 	if _, err := db.Exec(query, args...); err != nil {
 		t.Fatalf("exec %q: %v", query, err)
@@ -116,9 +115,9 @@ func TestAdminPoolMasksCredentialsAndCountsSubscribers(t *testing.T) {
 
 func TestAdminSettingsValidationAndAtomicUpdate(t *testing.T) {
 	ts, db := newAdminTestServer(t, stubAssets())
-	mustExec(t, db, `INSERT INTO settings (key, value, updated_at) VALUES (?,?,?)`,
+	mustExec(t, db, `INSERT INTO settings (setting_key, value, updated_at) VALUES (?,?,?)`,
 		"poll.interval", "30m", store.Now())
-	mustExec(t, db, `INSERT INTO settings (key, value, updated_at) VALUES (?,?,?)`,
+	mustExec(t, db, `INSERT INTO settings (setting_key, value, updated_at) VALUES (?,?,?)`,
 		"webui.cookie_secure", "false", store.Now())
 
 	admin := login(t, ts, "admin", "admin-pass")
@@ -152,7 +151,7 @@ func TestAdminSettingsValidationAndAtomicUpdate(t *testing.T) {
 	admin.do(http.MethodPut, "/api/admin/settings", map[string]any{"settings": valid}, http.StatusOK)
 	for k, want := range valid {
 		var got string
-		if err := db.QueryRow(`SELECT value FROM settings WHERE key=?`, k).Scan(&got); err != nil {
+		if err := db.QueryRow(`SELECT value FROM settings WHERE setting_key=?`, k).Scan(&got); err != nil {
 			t.Fatal(err)
 		}
 		if got != want {
@@ -182,7 +181,7 @@ func TestAdminSettingsValidationAndAtomicUpdate(t *testing.T) {
 	admin.do(http.MethodPut, "/api/admin/settings",
 		map[string]any{"settings": map[string]string{}}, http.StatusBadRequest)
 	var interval string
-	if err := db.QueryRow(`SELECT value FROM settings WHERE key='poll.interval'`).Scan(&interval); err != nil {
+	if err := db.QueryRow(`SELECT value FROM settings WHERE setting_key='poll.interval'`).Scan(&interval); err != nil {
 		t.Fatal(err)
 	}
 	if interval != "45m" {
@@ -227,7 +226,7 @@ func TestAdminAuditListsWriteEvents(t *testing.T) {
 
 func TestAdminRateLimitShowsChannelGatesWithoutIPs(t *testing.T) {
 	ts, db := newAdminTestServer(t, stubAssets())
-	mustExec(t, db, `INSERT INTO settings (key, value, updated_at) VALUES (?,?,?)`,
+	mustExec(t, db, `INSERT INTO settings (setting_key, value, updated_at) VALUES (?,?,?)`,
 		"notify.send_spacing", "250ms", store.Now())
 	mustExec(t, db, `INSERT INTO delivery_groups
 		(group_id, cycle_id, merge_key, channel_type, idempotency_key, status, created_at)

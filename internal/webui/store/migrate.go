@@ -3,25 +3,188 @@
 package store
 
 import (
-	"database/sql"
-	_ "embed"
 	"fmt"
+	"strings"
 )
 
-// schemaSQL holds the latest schema. Every statement is IF NOT EXISTS, so a
-// database created by an older release simply gains the tables it lacks. This
-// only works for NEW TABLES: adding a column to an existing table needs a real
-// incremental step here (ALTER TABLE) plus its own version bump.
-//
-//go:embed schema.sql
-var schemaSQL string
+// quoteIdent quotes an identifier for the dialect. Only the migration renames
+// need this: the rest of the schema avoids reserved words entirely.
+func quoteIdent(d Dialect, name string) string {
+	if d == MySQL {
+		return "`" + name + "`"
+	}
+	return `"` + name + `"`
+}
 
-const schemaVersion = 6
+// columnDecl is the per-dialect body of an ADD COLUMN. The three schema files
+// already declare these columns for a fresh database; the declarations here
+// exist so a database created by an older release can be upgraded in place.
+type columnDecl struct {
+	table, column string
+	decl          map[Dialect]string
+}
 
-func migrate(db *sql.DB) error {
-	var version int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
-		return fmt.Errorf("webui: read schema version: %w", err)
+var incrementalColumns = []columnDecl{
+	{
+		table: "users", column: "timezone",
+		decl: map[Dialect]string{
+			SQLite:   "TEXT NOT NULL DEFAULT ''",
+			MySQL:    "VARCHAR(64) NOT NULL DEFAULT ''",
+			Postgres: "TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		// v4 moved the notification shape from each subscription to the
+		// account. Any value an old row had in subscriptions.mode is
+		// intentionally dropped: it was a per-subscription choice, and guessing
+		// an account-wide value from a mix of them would change behaviour for a
+		// user who had both. A database migrated from v3 keeps that column, now
+		// unused; it has a NOT NULL DEFAULT, so the narrowed INSERT in the API
+		// keeps working without a table rebuild.
+		table: "users", column: "notify_mode",
+		decl: map[Dialect]string{
+			SQLite:   "TEXT NOT NULL DEFAULT 'digest' CHECK (notify_mode IN ('digest', 'per_feed'))",
+			MySQL:    "VARCHAR(32) NOT NULL DEFAULT 'digest' CHECK (notify_mode IN ('digest', 'per_feed'))",
+			Postgres: "TEXT NOT NULL DEFAULT 'digest' CHECK (notify_mode IN ('digest', 'per_feed'))",
+		},
+	},
+	{
+		// v6 columns. ALTER TABLE ADD COLUMN cannot declare UNIQUE, and every
+		// pre-existing row has preset_key='', so preset_key becomes unique
+		// through the partial index in schemaIndexes, not through the column.
+		table: "catalog_entries", column: "preset_key",
+		decl: map[Dialect]string{
+			SQLite:   "TEXT NOT NULL DEFAULT ''",
+			MySQL:    "VARCHAR(191) NOT NULL DEFAULT ''",
+			Postgres: "TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		table: "catalog_entries", column: "preset_version",
+		decl: map[Dialect]string{
+			SQLite:   "INTEGER NOT NULL DEFAULT 0",
+			MySQL:    "INTEGER NOT NULL DEFAULT 0",
+			Postgres: "INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		table: "catalog_entries", column: "preset_edited",
+		decl: map[Dialect]string{
+			SQLite:   "INTEGER NOT NULL DEFAULT 0",
+			MySQL:    "INTEGER NOT NULL DEFAULT 0",
+			Postgres: "INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+}
+
+// columnRenames are the v7 changes: two columns were named after a word MySQL
+// reserves and a word MySQL treats as a type. Only databases created before
+// the multi-backend release still carry the old name.
+var columnRenames = []struct{ table, from, to string }{
+	{"settings", "key", "setting_key"},
+	{"notifications", "text", "body"},
+}
+
+// ensureSchema applies every step needed to reach schemaVersion. It runs inside
+// a transaction on SQLite and PostgreSQL; on MySQL the caller has to run it
+// statement by statement because DDL there implicitly commits.
+func ensureSchema(g *gateway) error {
+	statements, err := schemaStatements(g.Dialect())
+	if err != nil {
+		return err
+	}
+	for _, stmt := range statements {
+		if _, err := g.Exec(stmt); err != nil {
+			return explain(stmt, err)
+		}
+	}
+	for _, rename := range columnRenames {
+		if err := renameColumn(g, rename.table, rename.from, rename.to); err != nil {
+			return err
+		}
+	}
+	for _, col := range incrementalColumns {
+		decl, ok := col.decl[g.Dialect()]
+		if !ok {
+			return fmt.Errorf("webui: no %s declaration for %s.%s", g.Dialect(), col.table, col.column)
+		}
+		if err := ensureColumn(g, col.table, col.column, decl); err != nil {
+			return err
+		}
+	}
+	for _, def := range schemaIndexes {
+		if err := ensureIndex(g, def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// renameColumn renames table.from to table.to on databases that still carry the
+// old name, and is a no-op everywhere else.
+func renameColumn(g *gateway, table, from, to string) error {
+	hasFrom, err := columnExists(g, table, from)
+	if err != nil {
+		return fmt.Errorf("webui: inspect %s: %w", table, err)
+	}
+	if !hasFrom {
+		return nil
+	}
+	hasTo, err := columnExists(g, table, to)
+	if err != nil {
+		return fmt.Errorf("webui: inspect %s: %w", table, err)
+	}
+	if hasTo {
+		return nil
+	}
+	stmt := fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s",
+		table, quoteIdent(g.Dialect(), from), to)
+	if _, err := g.Exec(stmt); err != nil {
+		return explain(stmt, err)
+	}
+	return nil
+}
+
+// ensureColumn adds table.column when it is missing.
+func ensureColumn(g *gateway, table, column, decl string) error {
+	found, err := columnExists(g, table, column)
+	if err != nil {
+		return fmt.Errorf("webui: inspect %s: %w", table, err)
+	}
+	if found {
+		return nil
+	}
+	stmt := "ALTER TABLE " + table + " ADD COLUMN " + column + " " + decl
+	if _, err := g.Exec(stmt); err != nil {
+		return explain(stmt, err)
+	}
+	return nil
+}
+
+// ensureIndex creates one index from schemaIndexes. SQLite and PostgreSQL could
+// use CREATE INDEX IF NOT EXISTS, MySQL cannot, so existence is always checked
+// first and the statement never carries the clause.
+func ensureIndex(g *gateway, def indexDef) error {
+	exists, err := indexExists(g, def.Table, def.Name)
+	if err != nil {
+		return fmt.Errorf("webui: inspect index %s: %w", def.Name, err)
+	}
+	if exists {
+		return nil
+	}
+	stmt := def.statement(g.Dialect())
+	if _, err := g.Exec(stmt); err != nil {
+		return explain(stmt, err)
+	}
+	return nil
+}
+
+// migrate brings the database to schemaVersion, or refuses to touch a database
+// written by a newer binary.
+func migrate(db *DB) error {
+	version, err := readSchemaVersion(db)
+	if err != nil {
+		return err
 	}
 	if version > schemaVersion {
 		return fmt.Errorf("webui: database schema version %d is newer than this binary supports (%d)", version, schemaVersion)
@@ -29,59 +192,34 @@ func migrate(db *sql.DB) error {
 	if version == schemaVersion {
 		return nil
 	}
-
+	if db.Dialect() == MySQL {
+		// MySQL DDL commits implicitly, so a wrapping transaction would give a
+		// false sense of atomicity. Each step is individually idempotent and the
+		// version is recorded last, so a failed run simply resumes next start.
+		if err := ensureSchema(&db.gateway); err != nil {
+			return err
+		}
+		return recordVersion(db)
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("webui: begin schema migration: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(schemaSQL); err != nil {
-		return fmt.Errorf("webui: apply schema: %w", err)
-	}
-	// Columns added to an existing table cannot come from schema.sql, which only
-	// ever creates whole tables. Each one is applied here, guarded by a lookup so
-	// that a brand-new database (where schema.sql already declared it) is a no-op.
-	if err := ensureColumn(tx, "users", "timezone", "TEXT NOT NULL DEFAULT ''"); err != nil {
+	if err := ensureSchema(&tx.gateway); err != nil {
 		return err
 	}
-	// v4 moved the notification shape from each subscription to the account.
-	// Any value an old row had in subscriptions.mode is intentionally dropped:
-	// it was a per-subscription choice, and guessing an account-wide value from
-	// a mix of them would change behaviour for a user who had both. A database
-	// migrated from v3 keeps that column, now unused; it has a NOT NULL DEFAULT,
-	// so the narrowed INSERT in the API keeps working without a table rebuild.
-	if err := ensureColumn(tx, "users", "notify_mode",
-		"TEXT NOT NULL DEFAULT 'digest' CHECK (notify_mode IN ('digest', 'per_feed'))"); err != nil {
-		return err
+	if _, err := tx.ExecIgnore(`INSERT INTO schema_migrations (version, applied_at) VALUES (?,?)`,
+		schemaVersion, Now()); err != nil {
+		return fmt.Errorf("webui: record schema version: %w", err)
 	}
-	// v5 adds the three catalog tables. They are whole new tables, so the
-	// IF NOT EXISTS statements above cover both a fresh database and a v4
-	// upgrade; no incremental ALTER step is needed for them.
-	//
-	// v6: catalog_preset_state is another whole new table, so schemaSQL covers
-	// it too. The three catalog_entries columns are ADD COLUMN steps and must
-	// be applied here; schema.sql deliberately does not declare them, otherwise
-	// a fresh database and an upgraded one would end up with different shapes.
-	for _, col := range []struct{ name, decl string }{
-		{"preset_key", "TEXT NOT NULL DEFAULT ''"},
-		{"preset_version", "INTEGER NOT NULL DEFAULT 0"},
-		{"preset_edited", "INTEGER NOT NULL DEFAULT 0"},
-	} {
-		if err := ensureColumn(tx, "catalog_entries", col.name, col.decl); err != nil {
-			return err
+	if tx.Dialect() == SQLite {
+		// PRAGMA cannot be parameterized, but the value is a compile-time
+		// constant. The legacy marker stays in sync so a pre-1.2 binary still
+		// recognises a newer database instead of silently downgrading it.
+		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
+			return fmt.Errorf("webui: set sqlite user_version: %w", err)
 		}
-	}
-	// The partial unique index cannot live in schema.sql: on an upgraded
-	// database that file runs before these columns exist. ALTER TABLE ADD
-	// COLUMN also cannot declare UNIQUE, and every pre-existing row has
-	// preset_key='', so a plain unique index would fail immediately.
-	if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_catalog_entries_preset_key
-		ON catalog_entries(preset_key) WHERE preset_key <> ''`); err != nil {
-		return fmt.Errorf("webui: create preset_key index: %w", err)
-	}
-	// PRAGMA cannot be parameterized, but the value is a compile-time constant.
-	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
-		return fmt.Errorf("webui: set schema version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("webui: commit schema migration: %w", err)
@@ -89,43 +227,6 @@ func migrate(db *sql.DB) error {
 	return nil
 }
 
-// ensureColumn adds table.column when it is missing. The rows are fully drained
-// and closed before the ALTER, because the pool holds a single connection.
-func ensureColumn(tx *sql.Tx, table, column, decl string) error {
-	rows, err := tx.Query("PRAGMA table_info(" + table + ")")
-	if err != nil {
-		return fmt.Errorf("webui: inspect %s: %w", table, err)
-	}
-	found := false
-	for rows.Next() {
-		var (
-			cid     int
-			name    string
-			typ     string
-			notNull int
-			dflt    sql.NullString
-			pk      int
-		)
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
-			rows.Close()
-			return fmt.Errorf("webui: inspect %s: %w", table, err)
-		}
-		if name == column {
-			found = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("webui: inspect %s: %w", table, err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("webui: inspect %s: %w", table, err)
-	}
-	if found {
-		return nil
-	}
-	if _, err := tx.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + decl); err != nil {
-		return fmt.Errorf("webui: add column %s.%s: %w", table, column, err)
-	}
-	return nil
-}
+// normalizeDSN trims surrounding whitespace so an env var pasted with a
+// trailing newline into a compose file does not break the driver.
+func normalizeDSN(dsn string) string { return strings.TrimSpace(dsn) }

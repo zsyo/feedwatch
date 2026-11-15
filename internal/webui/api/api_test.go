@@ -4,7 +4,6 @@ package api
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -33,7 +32,7 @@ func newTestSealer(t *testing.T) *secrets.Sealer {
 
 // opts let preset-sync tests inject a Loader pointed at a local test server;
 // every existing caller keeps working with no options.
-func newTestServer(t *testing.T, opts ...Option) (*httptest.Server, *sql.DB) {
+func newTestServer(t *testing.T, opts ...Option) (*httptest.Server, *store.DB) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "feedwatch.db"), nil)
 	if err != nil {
@@ -52,7 +51,7 @@ func newTestServer(t *testing.T, opts ...Option) (*httptest.Server, *sql.DB) {
 	return ts, db
 }
 
-func mustUser(t *testing.T, db *sql.DB, name, password, role string, mustChange int) int64 {
+func mustUser(t *testing.T, db *store.DB, name, password, role string, mustChange int) int64 {
 	t.Helper()
 	hash, err := auth.HashPassword(password)
 	if err != nil {

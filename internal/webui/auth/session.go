@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"feedwatch/internal/webui/store"
 )
 
 const (
@@ -33,14 +35,15 @@ type Session struct {
 }
 
 // Manager owns session persistence. The raw token exists only in the browser's
-// HttpOnly cookie and in the返回值 of CreateSession; SQLite stores its hash.
+// HttpOnly cookie and in the return value of CreateSession; the database stores
+// its hash, so a restart never loses a login.
 type Manager struct {
-	db     *sql.DB
+	db     *store.DB
 	ttl    time.Duration
 	secure bool
 }
 
-func New(db *sql.DB, ttl time.Duration, secure bool) *Manager {
+func New(db *store.DB, ttl time.Duration, secure bool) *Manager {
 	if ttl <= 0 {
 		ttl = 7 * 24 * time.Hour
 	}

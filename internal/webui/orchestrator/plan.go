@@ -25,9 +25,10 @@ type pendingNotification struct {
 // There is deliberately NO cross-user merging. Email providers key sends by
 // each user's own api_key, so a merged request would have to pick one person's
 // key and would hide the send from the other users' provider dashboards.
-func PlanDeliveries(ctx context.Context, db *sql.DB) (int, error) {
-	// The store keeps a single SQLite connection, so all reads must be fully
-	// drained before any write on that connection.
+func PlanDeliveries(ctx context.Context, db *store.DB) (int, error) {
+	// SQLite runs on a single connection, so every read must be fully drained
+	// before any write: a network backend would tolerate the overlap, SQLite
+	// would deadlock on itself.
 	rows, err := db.QueryContext(ctx, `SELECT id, cycle_id, kind, markdown
 		FROM notifications WHERE merge_key='pending' ORDER BY id`)
 	if err != nil {

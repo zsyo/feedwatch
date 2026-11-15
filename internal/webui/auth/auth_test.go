@@ -3,7 +3,6 @@
 package auth
 
 import (
-	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +14,7 @@ import (
 	"feedwatch/internal/webui/store"
 )
 
-func newTestManager(t *testing.T) (*Manager, *sql.DB) {
+func newTestManager(t *testing.T) (*Manager, *store.DB) {
 	t.Helper()
 	s, err := store.Open(filepath.Join(t.TempDir(), "feedwatch.db"), nil)
 	if err != nil {
@@ -25,7 +24,7 @@ func newTestManager(t *testing.T) (*Manager, *sql.DB) {
 	return New(s.DB(), time.Hour, false), s.DB()
 }
 
-func insertUser(t *testing.T, db *sql.DB, username, password, role string, active bool) int64 {
+func insertUser(t *testing.T, db *store.DB, username, password, role string, active bool) int64 {
 	t.Helper()
 	hash, err := HashPassword(password)
 	if err != nil {

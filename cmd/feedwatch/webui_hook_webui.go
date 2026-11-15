@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,7 +35,10 @@ func webuiLaunch(cfgPath, logLevel, logFormat string, once, dryRun bool) (bool, 
 
 func runWebUI(cfgPath, logLevel, logFormat string, once, dryRun bool) error {
 	log := newLogger(logLevel, logFormat)
-	dbPath := envOr("FEEDWATCH_DB_PATH", "data/feedwatch.db")
+	dbCfg, err := databaseConfig()
+	if err != nil {
+		return err
+	}
 	addr := envOr("FEEDWATCH_HTTP_ADDR", ":8080")
 	ttl := 7 * 24 * time.Hour
 	if raw := os.Getenv("FEEDWATCH_WEBUI_SESSION_TTL"); raw != "" {
@@ -46,18 +50,19 @@ func runWebUI(cfgPath, logLevel, logFormat string, once, dryRun bool) error {
 	}
 	secure := envBool("FEEDWATCH_WEBUI_COOKIE_SECURE")
 
-	// Fails fast on an unwritable data directory (WAL needs -wal/-shm siblings),
-	// before any HTTP listener or notification is started.
-	st, err := store.Open(dbPath, log)
+	// Fails fast on an unreachable server or an unwritable data directory (WAL
+	// needs -wal/-shm siblings), before any HTTP listener is started.
+	st, err := store.OpenConfig(dbCfg, log)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
 
-	// The master key lives next to the database so a volume backup carries both.
-	// A failure here is fatal: running with a fresh key would silently orphan
-	// every stored channel credential.
-	sealer, err := secrets.LoadOrCreate(filepath.Dir(dbPath), log)
+	// The master key must live on durable storage that is backed up together
+	// with the database: next to the SQLite file, or in FEEDWATCH_DATA_DIR when
+	// the database is a network server. A failure here is fatal: running with a
+	// fresh key would silently orphan every stored channel credential.
+	sealer, err := secrets.LoadOrCreate(dataDir(dbCfg), log)
 	if err != nil {
 		return err
 	}
@@ -174,7 +179,7 @@ func runWebUI(cfgPath, logLevel, logFormat string, once, dryRun bool) error {
 		shutdownErr <- httpServer.Shutdown(shutdownCtx)
 	}()
 
-	log.Info("webui: listening", "addr", addr, "db", dbPath,
+	log.Info("webui: listening", "addr", addr, "driver", dbCfg.Dialect.String(), "db", redactDSN(dbCfg),
 		"poll_interval", dur("poll.interval", 30*time.Minute).String(),
 		"send_spacing", dur("notify.send_spacing", 250*time.Millisecond).String(),
 		"session_ttl", ttl.String(), "cookie_secure", secure)
@@ -183,6 +188,62 @@ func runWebUI(cfgPath, logLevel, logFormat string, once, dryRun bool) error {
 		return <-shutdownErr
 	}
 	return err
+}
+
+// databaseConfig resolves the backend from the environment. The driver wins:
+// an empty driver keeps the historical SQLite default, so an existing
+// deployment needs no new variables.
+func databaseConfig() (store.Config, error) {
+	dialect, err := store.ParseDialect(os.Getenv("FEEDWATCH_DB_DRIVER"))
+	if err != nil {
+		return store.Config{}, fmt.Errorf("webui: %w", err)
+	}
+	dsn := os.Getenv("FEEDWATCH_DB_DSN")
+	if dsn == "" {
+		if dialect != store.SQLite {
+			return store.Config{}, fmt.Errorf("webui: FEEDWATCH_DB_DRIVER=%s requires FEEDWATCH_DB_DSN", dialect)
+		}
+		dsn = envOr("FEEDWATCH_DB_PATH", "data/feedwatch.db")
+	}
+	conns := 0
+	if raw := os.Getenv("FEEDWATCH_DB_MAX_OPEN_CONNS"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return store.Config{}, fmt.Errorf("webui: invalid FEEDWATCH_DB_MAX_OPEN_CONNS %q", raw)
+		}
+		conns = n
+	}
+	return store.Config{Dialect: dialect, DSN: dsn, MaxOpenConns: conns}, nil
+}
+
+// dataDir is where secret.key lives. For SQLite it stays next to the database
+// file (the historical location); a network backend has no file, so
+// FEEDWATCH_DATA_DIR decides, defaulting to ./data.
+func dataDir(cfg store.Config) string {
+	if dir := os.Getenv("FEEDWATCH_DATA_DIR"); dir != "" {
+		return dir
+	}
+	if cfg.Dialect == store.SQLite {
+		return filepath.Dir(cfg.DSN)
+	}
+	return "data"
+}
+
+// redactDSN hides the password before a DSN reaches the log. A connection
+// string with credentials must never be printed, not even at info level.
+func redactDSN(cfg store.Config) string {
+	if cfg.Dialect == store.SQLite {
+		return cfg.DSN
+	}
+	dsn := cfg.DSN
+	// postgres://user:pass@host/db and user:pass@tcp(host)/db both put the
+	// secret between the first ':' and the last '@' before any '/'.
+	if at := strings.LastIndex(dsn, "@"); at > 0 {
+		if colon := strings.Index(dsn[:at], ":"); colon > 0 {
+			return dsn[:colon+1] + "***" + dsn[at:]
+		}
+	}
+	return dsn
 }
 
 func runDeliveryLoop(ctx context.Context, st *store.Store, w *orchestrator.DeliveryWorker, log *slog.Logger) {

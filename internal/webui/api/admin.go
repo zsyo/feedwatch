@@ -507,7 +507,7 @@ func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request, _ Ctx) {
 }
 
 func (s *Server) settingsMap() (map[string]string, error) {
-	rows, err := s.db.Query(`SELECT key, value FROM settings`)
+	rows, err := s.db.Query(`SELECT setting_key, value FROM settings`)
 	if err != nil {
 		return nil, err
 	}
@@ -529,7 +529,7 @@ func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request, _ Ctx)
 
 func (s *Server) settingsResponse() map[string]any {
 	rows := make([]map[string]any, 0)
-	if result, err := s.db.Query(`SELECT key, value, updated_at FROM settings ORDER BY key`); err == nil {
+	if result, err := s.db.Query(`SELECT setting_key, value, updated_at FROM settings ORDER BY setting_key`); err == nil {
 		for result.Next() {
 			var key, value, updated string
 			if result.Scan(&key, &value, &updated) == nil {
@@ -583,9 +583,8 @@ func (s *Server) adminPutSettings(w http.ResponseWriter, r *http.Request, _ Ctx)
 	defer tx.Rollback()
 	now := store.Now()
 	for _, k := range keys {
-		if _, err := tx.Exec(`INSERT INTO settings (key, value, updated_at) VALUES (?,?,?)
-			ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
-			k, req.Settings[k], now); err != nil {
+		if _, err := tx.Upsert(`INSERT INTO settings (setting_key, value, updated_at) VALUES (?,?,?)`,
+			"setting_key", []string{"value", "updated_at"}, k, req.Settings[k], now); err != nil {
 			fail(w, http.StatusInternalServerError, "db_error", err.Error())
 			return
 		}

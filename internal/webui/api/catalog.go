@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"feedwatch/internal/webui"
 	"feedwatch/internal/webui/store"
@@ -485,7 +484,7 @@ func (s *Server) createSubmission(w http.ResponseWriter, r *http.Request, c Ctx)
 	}
 
 	now := store.Now()
-	res, err := tx.Exec(`INSERT INTO submissions
+	id, err := tx.InsertID(`INSERT INTO submissions
 		(kind, status, entry_id, url, url_key, name, category_id, description, homepage,
 		 before_json, submitted_by, created_at, updated_at)
 		VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -494,7 +493,7 @@ func (s *Server) createSubmission(w http.ResponseWriter, r *http.Request, c Ctx)
 	if err != nil {
 		// The partial unique index is the last line of defence against two
 		// simultaneous proposals for the same URL.
-		if strings.Contains(strings.ToUpper(err.Error()), "UNIQUE") {
+		if s.db.Dialect().IsUniqueViolation(err) {
 			fail(w, http.StatusConflict, "duplicate_pending", "this URL already has a pending proposal")
 		} else {
 			fail(w, http.StatusInternalServerError, "db_error", err.Error())
@@ -505,7 +504,6 @@ func (s *Server) createSubmission(w http.ResponseWriter, r *http.Request, c Ctx)
 		fail(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	id, _ := res.LastInsertId()
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "id": id})
 }
 

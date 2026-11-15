@@ -140,11 +140,28 @@ func bumpPresetCount(f *presetFileResult, field string) {
 
 // upsertPresetState records the version we just saw. It never touches the
 // deleted column: a tombstone written by adminDeleteEntry must stay set.
-func upsertPresetState(tx *sql.Tx, key string, version int, now string) error {
-	_, err := tx.Exec(`INSERT INTO catalog_preset_state (preset_key, last_version, deleted, updated_at)
-		VALUES (?,?,0,?) ON CONFLICT(preset_key) DO UPDATE SET
-		  last_version = MAX(catalog_preset_state.last_version, excluded.last_version),
-		  updated_at = excluded.updated_at`, key, version, now)
+func upsertPresetState(tx *store.Tx, key string, version int, now string) error {
+	// The counter only ever moves forward: the same preset can appear in two
+	// remote files, and a lower version in the second one must not win. Every
+	// engine spells "the larger of the two" differently, so this is one of the
+	// few statements written per dialect.
+	const insert = `INSERT INTO catalog_preset_state (preset_key, last_version, deleted, updated_at) VALUES (?,?,0,?)`
+	var stmt string
+	switch tx.Dialect() {
+	case store.MySQL:
+		stmt = insert + ` ON DUPLICATE KEY UPDATE
+			last_version = GREATEST(last_version, VALUES(last_version)),
+			updated_at = VALUES(updated_at)`
+	case store.Postgres:
+		stmt = insert + ` ON CONFLICT (preset_key) DO UPDATE SET
+			last_version = GREATEST(catalog_preset_state.last_version, excluded.last_version),
+			updated_at = excluded.updated_at`
+	default:
+		stmt = insert + ` ON CONFLICT(preset_key) DO UPDATE SET
+			last_version = MAX(catalog_preset_state.last_version, excluded.last_version),
+			updated_at = excluded.updated_at`
+	}
+	_, err := tx.Exec(stmt, key, version, now)
 	return err
 }
 
@@ -172,8 +189,8 @@ func (s *Server) applyPresets(items []presets.Prepared, snap *presets.Snapshot) 
 			continue
 		}
 		seenCategories[p.Category] = true
-		if _, err := tx.Exec(
-			`INSERT OR IGNORE INTO catalog_categories (name, created_at, updated_at) VALUES (?,?,?)`,
+		if _, err := tx.ExecIgnore(
+			`INSERT INTO catalog_categories (name, created_at, updated_at) VALUES (?,?,?)`,
 			p.Category, now, now); err != nil {
 			return result, "db_error", err.Error()
 		}

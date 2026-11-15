@@ -203,13 +203,8 @@ func (s *Server) createChannel(w http.ResponseWriter, r *http.Request, c Ctx) {
 		return
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`INSERT INTO channels (user_id, type, name, config_json, enabled) VALUES (?,?,?,?,?)`,
+	id, err := tx.InsertID(`INSERT INTO channels (user_id, type, name, config_json, enabled) VALUES (?,?,?,?,?)`,
 		c.User.ID, spec.Type, spec.Name, string(raw), 1)
-	if err != nil {
-		fail(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
-	}
-	id, err := res.LastInsertId()
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
@@ -369,7 +364,7 @@ func (s *Server) mergeSecrets(existing channelView, typ string, input channelInp
 }
 
 // sealInto writes (or clears) the sealed blob for one channel inside tx.
-func (s *Server) sealInto(tx *sql.Tx, channelID int64, values map[string]string) error {
+func (s *Server) sealInto(tx *store.Tx, channelID int64, values map[string]string) error {
 	sealed, err := s.sealer.SealMap(values, secrets.ChannelAAD(channelID))
 	if err != nil {
 		return err
@@ -378,9 +373,8 @@ func (s *Server) sealInto(tx *sql.Tx, channelID int64, values map[string]string)
 		_, err = tx.Exec(`DELETE FROM channel_secrets WHERE channel_id=?`, channelID)
 		return err
 	}
-	_, err = tx.Exec(`INSERT INTO channel_secrets (channel_id, ciphertext, updated_at) VALUES (?,?,?)
-		ON CONFLICT(channel_id) DO UPDATE SET ciphertext=excluded.ciphertext, updated_at=excluded.updated_at`,
-		channelID, sealed, store.Now())
+	_, err = tx.Upsert(`INSERT INTO channel_secrets (channel_id, ciphertext, updated_at) VALUES (?,?,?)`,
+		"channel_id", []string{"ciphertext", "updated_at"}, channelID, sealed, store.Now())
 	return err
 }
 

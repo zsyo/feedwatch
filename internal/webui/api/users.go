@@ -78,18 +78,17 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request, _ Ctx) {
 		return
 	}
 	now := store.Now()
-	res, err := s.db.Exec(`INSERT INTO users
+	id, err := s.db.InsertID(`INSERT INTO users
 		(username, password_hash, role, is_active, must_change_password, created_at, updated_at)
 		VALUES (?,?,?,?,?,?,?)`, req.Username, hash, req.Role, 1, 1, now, now)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+		if s.db.Dialect().IsUniqueViolation(err) {
 			fail(w, http.StatusConflict, "duplicate_user", "username already exists")
 			return
 		}
 		fail(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	id, _ := res.LastInsertId()
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "id": id})
 }
 

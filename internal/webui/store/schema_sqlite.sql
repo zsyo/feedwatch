@@ -1,9 +1,9 @@
--- FeedWatch WebUI schema, version 6.
--- Every statement is IF NOT EXISTS, so running this on an older database only
--- adds the tables it is missing. Adding a COLUMN to an existing table is not
--- covered by this file: migrate.go carries those as explicit ALTER TABLE steps.
--- Executed inside migrate.go's transaction.
+-- FeedWatch WebUI schema for SQLite, version 7.
+-- Executed statement by statement by migrate.go; indexes are created there too
+-- (MySQL has no CREATE INDEX IF NOT EXISTS, so they cannot live in this file).
 -- Timestamp columns are RFC3339 UTC strings so they sort lexicographically.
+-- The MySQL and PostgreSQL twins must declare the same tables and columns;
+-- TestSchemaFilesAgree enforces that.
 
 CREATE TABLE IF NOT EXISTS users (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at    TEXT NOT NULL,
   last_seen_at  TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
 CREATE TABLE IF NOT EXISTS subscriptions (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,10 +46,6 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   seeded_at      TEXT,
   deleted_at     TEXT
 );
--- A user may re-subscribe after deleting; only one live row per (user, URL).
-CREATE UNIQUE INDEX IF NOT EXISTS uq_subscriptions_live
-  ON subscriptions(user_id, url_key) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_subscriptions_url_key ON subscriptions(url_key);
 
 CREATE TABLE IF NOT EXISTS channels (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,7 +55,6 @@ CREATE TABLE IF NOT EXISTS channels (
   config_json  TEXT NOT NULL DEFAULT '{}',
   enabled      INTEGER NOT NULL DEFAULT 1
 );
-CREATE INDEX IF NOT EXISTS idx_channels_user ON channels(user_id);
 
 -- Channel credentials sealed with the master key (AES-256-GCM). Kept out of
 -- channels.config_json so no ordinary channel query, export or debug dump ever
@@ -101,19 +95,19 @@ CREATE TABLE IF NOT EXISTS user_seen (
 );
 
 -- Materialized, already rendered notifications. Delivery retries read these
--- rows instead of re-fetching the feed.
+-- rows instead of re-fetching the feed. The body column is called "body" and
+-- not "text" because TEXT is a type name in MySQL and would need quoting there.
 CREATE TABLE IF NOT EXISTS notifications (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   cycle_id    TEXT NOT NULL,
   merge_key   TEXT NOT NULL DEFAULT '',
   kind        TEXT NOT NULL,
   subject     TEXT NOT NULL DEFAULT '',
-  "text"      TEXT NOT NULL DEFAULT '',
+  body        TEXT NOT NULL DEFAULT '',
   html        TEXT NOT NULL DEFAULT '',
   markdown    TEXT NOT NULL DEFAULT '',
   created_at  TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_notifications_cycle ON notifications(cycle_id);
 
 -- One network call per merged group.
 CREATE TABLE IF NOT EXISTS delivery_groups (
@@ -127,7 +121,6 @@ CREATE TABLE IF NOT EXISTS delivery_groups (
   last_error        TEXT NOT NULL DEFAULT '',
   created_at        TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_delivery_groups_status ON delivery_groups(status);
 
 CREATE TABLE IF NOT EXISTS deliveries (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -141,9 +134,6 @@ CREATE TABLE IF NOT EXISTS deliveries (
   sent_at      TEXT,
   UNIQUE (cycle_id, user_id, channel_id, group_id, kind)
 );
-CREATE INDEX IF NOT EXISTS idx_deliveries_status ON deliveries(status);
--- The admin drill-down lists one user's recent deliveries newest first.
-CREATE INDEX IF NOT EXISTS idx_deliveries_user ON deliveries(user_id, id);
 
 CREATE TABLE IF NOT EXISTS cycles (
   id           TEXT PRIMARY KEY,
@@ -154,10 +144,12 @@ CREATE TABLE IF NOT EXISTS cycles (
   failed       INTEGER NOT NULL DEFAULT 0
 );
 
+-- "setting_key" and not "key": KEY is reserved in MySQL, and a column named
+-- "key" would need backticks, which SQLite and PostgreSQL do not share.
 CREATE TABLE IF NOT EXISTS settings (
-  key         TEXT PRIMARY KEY,
-  value       TEXT NOT NULL,
-  updated_at  TEXT NOT NULL
+  setting_key  TEXT PRIMARY KEY,
+  value        TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -169,7 +161,6 @@ CREATE TABLE IF NOT EXISTS audit_log (
   detail_json  TEXT NOT NULL DEFAULT '{}',
   ip           TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
 
 -- ===== Subscription catalog (v5) =====
 -- The catalog is a browsable set of TEMPLATES, not anybody's subscription.
@@ -197,12 +188,11 @@ CREATE TABLE IF NOT EXISTS catalog_entries (
   enabled      INTEGER NOT NULL DEFAULT 1,
   created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at   TEXT NOT NULL,
-  updated_at   TEXT NOT NULL
+  updated_at   TEXT NOT NULL,
+  preset_key     TEXT NOT NULL DEFAULT '',
+  preset_version INTEGER NOT NULL DEFAULT 0,
+  preset_edited  INTEGER NOT NULL DEFAULT 0
 );
--- Disabled entries still claim their URL: re-enable instead of re-submitting.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_catalog_entries_url_key ON catalog_entries(url_key);
-CREATE INDEX IF NOT EXISTS idx_catalog_entries_category ON catalog_entries(category_id);
-CREATE INDEX IF NOT EXISTS idx_catalog_entries_enabled ON catalog_entries(enabled, id);
 
 -- Every user submission (new entry or an update to an existing one). Rows are
 -- review history: they are never deleted, and only approval writes to the
@@ -230,19 +220,8 @@ CREATE TABLE IF NOT EXISTS submissions (
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
--- At most one pending proposal per URL, whatever its kind. Historical
--- approved/rejected rows may repeat a url_key.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_submissions_pending_url
-  ON submissions(url_key) WHERE status = 'pending';
-CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status, id);
-CREATE INDEX IF NOT EXISTS idx_submissions_user ON submissions(submitted_by, id);
-CREATE INDEX IF NOT EXISTS idx_submissions_entry ON submissions(entry_id);
 
 -- ===== Remote preset state (v6) =====
--- The catalog_entries preset columns are NOT declared here: adding a column to
--- an existing table is an incremental ALTER in migrate.go, and on an upgraded
--- database this file runs BEFORE those columns exist. The partial unique index
--- on preset_key is created there for the same reason.
 CREATE TABLE IF NOT EXISTS catalog_preset_state (
   preset_key   TEXT PRIMARY KEY,
   last_version INTEGER NOT NULL DEFAULT 0,

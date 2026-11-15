@@ -4,7 +4,6 @@ package orchestrator
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -55,7 +54,7 @@ func release(id, version string) domain.Release {
 	}
 }
 
-func newHarness(t *testing.T, f Fetcher) (*Orchestrator, *sql.DB) {
+func newHarness(t *testing.T, f Fetcher) (*Orchestrator, *store.DB) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "feedwatch.db"), nil)
 	if err != nil {
@@ -70,7 +69,7 @@ func newHarness(t *testing.T, f Fetcher) (*Orchestrator, *sql.DB) {
 	return o, st.DB()
 }
 
-func addUser(t *testing.T, db *sql.DB, name string) int64 {
+func addUser(t *testing.T, db *store.DB, name string) int64 {
 	t.Helper()
 	res, err := db.Exec(`INSERT INTO users
 		(username, password_hash, role, is_active, must_change_password, created_at, updated_at)
@@ -82,7 +81,7 @@ func addUser(t *testing.T, db *sql.DB, name string) int64 {
 	return id
 }
 
-func addChannel(t *testing.T, db *sql.DB, userID int64) int64 {
+func addChannel(t *testing.T, db *store.DB, userID int64) int64 {
 	t.Helper()
 	res, err := db.Exec(`INSERT INTO channels (user_id, type, name, config_json, enabled) VALUES (?,?,?,?,?)`,
 		userID, "log", "log", `{"type":"log"}`, 1)
@@ -93,7 +92,7 @@ func addChannel(t *testing.T, db *sql.DB, userID int64) int64 {
 	return id
 }
 
-func addSubscription(t *testing.T, db *sql.DB, userID int64, rawURL, policy, filterJSON string) string {
+func addSubscription(t *testing.T, db *store.DB, userID int64, rawURL, policy, filterJSON string) string {
 	t.Helper()
 	normalized, key, err := webui.URLKey(rawURL)
 	if err != nil {
@@ -117,14 +116,14 @@ func addSubscription(t *testing.T, db *sql.DB, userID int64, rawURL, policy, fil
 
 // setNotifyMode switches a user's account-wide notification shape. It lives on
 // users, so it cannot be passed per subscription.
-func setNotifyMode(t *testing.T, db *sql.DB, userID int64, mode string) {
+func setNotifyMode(t *testing.T, db *store.DB, userID int64, mode string) {
 	t.Helper()
 	if _, err := db.Exec(`UPDATE users SET notify_mode=? WHERE id=?`, mode, userID); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func countRows(t *testing.T, db *sql.DB, query string, args ...any) int {
+func countRows(t *testing.T, db *store.DB, query string, args ...any) int {
 	t.Helper()
 	var n int
 	if err := db.QueryRow(query, args...).Scan(&n); err != nil {
@@ -133,7 +132,7 @@ func countRows(t *testing.T, db *sql.DB, query string, args ...any) int {
 	return n
 }
 
-func notificationsEnvelopes(t *testing.T, db *sql.DB) []Envelope {
+func notificationsEnvelopes(t *testing.T, db *store.DB) []Envelope {
 	t.Helper()
 	rows, err := db.Query(`SELECT markdown FROM notifications ORDER BY id`)
 	if err != nil {

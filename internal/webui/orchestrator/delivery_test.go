@@ -4,7 +4,6 @@ package orchestrator
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"path/filepath"
@@ -49,7 +48,7 @@ func (r *recordingNotifier) setError(err error) {
 
 type deliveryHarness struct {
 	w   *DeliveryWorker
-	db  *sql.DB
+	db  *store.DB
 	rec *recordingNotifier
 }
 
@@ -251,7 +250,7 @@ func TestBareKindFallbackForFirstStartBaseline(t *testing.T) {
 	c := addChannel(t, h.db, u)
 	now := fixedTime.Format(time.RFC3339Nano)
 	if _, err := h.db.Exec(`INSERT INTO notifications
-		(cycle_id, merge_key, kind, subject, "text", html, markdown, created_at)
+		(cycle_id, merge_key, kind, subject, body, html, markdown, created_at)
 		VALUES (?,?,?,?,?,?,?,?)`, "seed-cycle", "seed-baseline", "baseline", "subject", "text", "", "", now); err != nil {
 		t.Fatal(err)
 	}

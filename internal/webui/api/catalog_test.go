@@ -12,7 +12,7 @@ import (
 	"feedwatch/internal/webui/store"
 )
 
-func insertCatalogCategory(t *testing.T, db *sql.DB, name string) int64 {
+func insertCatalogCategory(t *testing.T, db *store.DB, name string) int64 {
 	t.Helper()
 	res, err := db.Exec(`INSERT INTO catalog_categories (name, created_at, updated_at) VALUES (?,?,?)`,
 		name, store.Now(), store.Now())
@@ -23,7 +23,7 @@ func insertCatalogCategory(t *testing.T, db *sql.DB, name string) int64 {
 	return id
 }
 
-func insertCatalogEntry(t *testing.T, db *sql.DB, name, rawURL string, categoryID int64) (int64, string) {
+func insertCatalogEntry(t *testing.T, db *store.DB, name, rawURL string, categoryID int64) (int64, string) {
 	t.Helper()
 	normalized, key, err := webui.CatalogURLKey(rawURL)
 	if err != nil {
@@ -40,7 +40,7 @@ func insertCatalogEntry(t *testing.T, db *sql.DB, name, rawURL string, categoryI
 	return id, key
 }
 
-func catalogCount(t *testing.T, db *sql.DB, query string, args ...any) int {
+func catalogCount(t *testing.T, db *store.DB, query string, args ...any) int {
 	t.Helper()
 	var n int
 	if err := db.QueryRow(query, args...).Scan(&n); err != nil {

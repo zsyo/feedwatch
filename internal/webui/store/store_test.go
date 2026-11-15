@@ -4,10 +4,24 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// markLegacyVersion rewinds a fixture to look like a database created before
+// the multi-backend release: schema_migrations did not exist then, and PRAGMA
+// user_version was the only version marker.
+func markLegacyVersion(t *testing.T, db *DB, version int) {
+	t.Helper()
+	if _, err := db.Exec(`DROP TABLE schema_migrations`); err != nil {
+		t.Fatalf("drop schema_migrations: %v", err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
+		t.Fatalf("set user_version: %v", err)
+	}
+}
 
 func TestOpenMigratesEmptyDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "feedwatch.db")
@@ -101,9 +115,7 @@ func TestOpenUpgradesVersionOneDatabase(t *testing.T) {
 	if _, err := s.DB().Exec(`DROP TABLE channel_secrets`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB().Exec(`PRAGMA user_version = 1`); err != nil {
-		t.Fatal(err)
-	}
+	markLegacyVersion(t, s.DB(), 1)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -152,9 +164,7 @@ func TestOpenAddsTimezoneColumnToOlderDatabase(t *testing.T) {
 	if _, err := s.DB().Exec(`ALTER TABLE users DROP COLUMN timezone`); err != nil {
 		t.Fatalf("simulate v2 schema: %v", err)
 	}
-	if _, err := s.DB().Exec(`PRAGMA user_version = 2`); err != nil {
-		t.Fatal(err)
-	}
+	markLegacyVersion(t, s.DB(), 2)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -202,12 +212,12 @@ func TestOpenUpgradesToVersion5CatalogTables(t *testing.T) {
 		`DROP TABLE submissions`,
 		`DROP TABLE catalog_entries`,
 		`DROP TABLE catalog_categories`,
-		`PRAGMA user_version = 4`,
 	} {
 		if _, err := s.DB().Exec(stmt); err != nil {
 			t.Fatalf("simulate v4 schema (%s): %v", stmt, err)
 		}
 	}
+	markLegacyVersion(t, s.DB(), 4)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -263,12 +273,12 @@ func TestOpenUpgradesToVersion6PresetColumns(t *testing.T) {
 		`ALTER TABLE catalog_entries DROP COLUMN preset_version`,
 		`ALTER TABLE catalog_entries DROP COLUMN preset_edited`,
 		`DROP TABLE catalog_preset_state`,
-		`PRAGMA user_version = 5`,
 	} {
 		if _, err := s.DB().Exec(stmt); err != nil {
 			t.Fatalf("simulate v5 schema (%s): %v", stmt, err)
 		}
 	}
+	markLegacyVersion(t, s.DB(), 5)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -414,5 +424,71 @@ func TestForeignKeysAreEnforced(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToUpper(err.Error()), "FOREIGN KEY") {
 		t.Fatalf("want a foreign key error, got %v", err)
+	}
+}
+
+// TestOpenRenamesLegacyColumns covers the v6 -> v7 step: two columns were named
+// after words MySQL reserves ("key") or treats as a type ("text"), so they were
+// renamed. A database written by the previous release must keep its rows.
+func TestOpenRenamesLegacyColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "feedwatch.db")
+	s, err := Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := Now()
+	if _, err := s.DB().Exec(
+		`INSERT INTO settings (setting_key, value, updated_at) VALUES (?,?,?)`,
+		"poll.interval", "45m", now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(
+		`INSERT INTO notifications (cycle_id, merge_key, kind, subject, body, html, markdown, created_at)
+		 VALUES (?,?,?,?,?,?,?,?)`, "cycle-1", "pending", "digest", "subject", "plain body", "<p>x</p>", "md", now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	// Rewind to the v6 shape: old column names, no version table.
+	for _, stmt := range []string{
+		`ALTER TABLE settings RENAME COLUMN setting_key TO "key"`,
+		`ALTER TABLE notifications RENAME COLUMN body TO "text"`,
+	} {
+		if _, err := s.DB().Exec(stmt); err != nil {
+			t.Fatalf("simulate v6 schema (%s): %v", stmt, err)
+		}
+	}
+	markLegacyVersion(t, s.DB(), 6)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("Open(v6 database): %v", err)
+	}
+	defer again.Close()
+
+	var value string
+	if err := again.DB().QueryRow(
+		`SELECT value FROM settings WHERE setting_key=?`, "poll.interval").Scan(&value); err != nil {
+		t.Fatalf("settings was not renamed: %v", err)
+	}
+	if value != "45m" {
+		t.Fatalf("setting value = %q, want 45m", value)
+	}
+	var body string
+	if err := again.DB().QueryRow(`SELECT body FROM notifications WHERE cycle_id=?`, "cycle-1").Scan(&body); err != nil {
+		t.Fatalf("notifications was not renamed: %v", err)
+	}
+	if body != "plain body" {
+		t.Fatalf("notification body = %q, want %q", body, "plain body")
+	}
+	var version int
+	if err := again.DB().QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, schemaVersion)
 	}
 }

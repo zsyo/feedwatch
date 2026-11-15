@@ -4,7 +4,6 @@ package webui
 
 import (
 	"crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"fmt"
 	"log/slog"
@@ -95,7 +94,7 @@ func Seed(st *store.Store, log *slog.Logger) (SeedResult, error) {
 // (users.notify_mode) set from the notification page, so a global row would be
 // a value nothing reads. Databases seeded by earlier versions keep theirs and
 // the settings page labels it as informational.
-func seedSettings(tx *sql.Tx, now string) error {
+func seedSettings(tx *store.Tx, now string) error {
 	cfg := config.Default()
 	// Compact durations ("30m", not "30m0s") so the stored value matches what
 	// the settings page advertises as the default.
@@ -117,7 +116,8 @@ func seedSettings(tx *sql.Tx, now string) error {
 		"presets.timeout":       DefaultPresetTimeout,
 	}
 	for k, v := range settings {
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,?)`, k, v, now); err != nil {
+		if _, err := tx.ExecReplace(`INSERT INTO settings (setting_key, value, updated_at) VALUES (?,?,?)`,
+			"setting_key", k, v, now); err != nil {
 			return fmt.Errorf("webui: seed setting %q: %w", k, err)
 		}
 	}
@@ -125,14 +125,14 @@ func seedSettings(tx *sql.Tx, now string) error {
 }
 
 // seedCatalogExamples fills the subscription center on a brand-new database.
-// Everything is INSERT OR IGNORE (categories by name, entries by url_key) so a
+// Everything is insert-or-skip (categories by name, entries by url_key) so a
 // repeated seed, or an administrator who already edited an example, is left
 // alone. Only the three catalog tables are touched: a template must never turn
 // into a real subscription or a polling-pool row.
-func seedCatalogExamples(tx *sql.Tx, now string) error {
+func seedCatalogExamples(tx *store.Tx, now string) error {
 	for _, name := range ExampleCategoryNames() {
-		if _, err := tx.Exec(
-			`INSERT OR IGNORE INTO catalog_categories (name, created_at, updated_at) VALUES (?,?,?)`,
+		if _, err := tx.ExecIgnore(
+			`INSERT INTO catalog_categories (name, created_at, updated_at) VALUES (?,?,?)`,
 			name, now, now); err != nil {
 			return fmt.Errorf("webui: seed catalog category %q: %w", name, err)
 		}
@@ -142,7 +142,7 @@ func seedCatalogExamples(tx *sql.Tx, now string) error {
 		if err != nil {
 			return fmt.Errorf("webui: seed catalog entry %q: %w", e.Name, err)
 		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO catalog_entries
+		if _, err := tx.ExecIgnore(`INSERT INTO catalog_entries
 			(url, url_key, name, category_id, description, homepage, source_type, enabled, created_by, created_at, updated_at)
 			VALUES (?,?,?,(SELECT id FROM catalog_categories WHERE name=?),?,?,'atom',1,NULL,?,?)`,
 			normalized, key, e.Name, e.Category, e.Description, e.Homepage, now, now); err != nil {

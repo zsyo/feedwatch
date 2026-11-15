@@ -152,7 +152,7 @@ func (s *Server) subscribeURL(userID int64, in subscribeInput) (string, *writeEr
 		return "", &writeError{http.StatusInternalServerError, "db_error", err.Error()}
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`INSERT OR IGNORE INTO subscriptions
+	res, err := tx.ExecIgnore(`INSERT INTO subscriptions
 		(user_id, url, url_key, display_name, source_type, filter_json, notify_policy, enabled, seeded_at)
 		VALUES (?,?,?,?,?,?,?,?,?)`,
 		userID, normalized, key, in.DisplayName, sourceType, string(filterJSON), policy, 1, now)
@@ -163,13 +163,13 @@ func (s *Server) subscribeURL(userID int64, in subscribeInput) (string, *writeEr
 	if affected == 0 {
 		return "", &writeError{http.StatusConflict, "duplicate_subscription", "this URL is already subscribed"}
 	}
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO feed_pool (url_key, url, source_type) VALUES (?,?,?)`,
+	if _, err := tx.ExecIgnore(`INSERT INTO feed_pool (url_key, url, source_type) VALUES (?,?,?)`,
 		key, normalized, sourceType); err != nil {
 		return "", &writeError{http.StatusInternalServerError, "db_error", err.Error()}
 	}
 	// New subscriptions start from the current global baseline: never replay
 	// releases published before the user joined.
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO user_seen (user_id, url_key, release_id, seen_at)
+	if _, err := tx.ExecIgnore(`INSERT INTO user_seen (user_id, url_key, release_id, seen_at)
 		SELECT ?, url_key, release_id, ? FROM seen_ids WHERE url_key=?`, userID, now, key); err != nil {
 		return "", &writeError{http.StatusInternalServerError, "db_error", err.Error()}
 	}

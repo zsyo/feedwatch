@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"feedwatch/internal/webui/presets"
+	"feedwatch/internal/webui/store"
 )
 
 // Local stand-in for the GitHub raw host. The production guard resolves DNS and
@@ -110,7 +111,7 @@ func (r *presetRemote) useTwoFiles(t *testing.T) {
 	})
 }
 
-func newPresetSyncEnv(t *testing.T) (*httptest.Server, *sql.DB, *presetRemote) {
+func newPresetSyncEnv(t *testing.T) (*httptest.Server, *store.DB, *presetRemote) {
 	t.Helper()
 	r := &presetRemote{files: make(map[string]string)}
 	r.Server = httptest.NewServer(r)
@@ -156,7 +157,7 @@ type presetRowData struct {
 	cat     string
 }
 
-func readPresetRow(t *testing.T, db *sql.DB, key string) presetRowData {
+func readPresetRow(t *testing.T, db *store.DB, key string) presetRowData {
 	t.Helper()
 	var row presetRowData
 	err := db.QueryRow(`SELECT e.id, e.preset_version, e.preset_edited, e.name, e.url,
@@ -169,7 +170,7 @@ func readPresetRow(t *testing.T, db *sql.DB, key string) presetRowData {
 	return row
 }
 
-func presetRowExists(t *testing.T, db *sql.DB, key string) bool {
+func presetRowExists(t *testing.T, db *store.DB, key string) bool {
 	t.Helper()
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM catalog_entries WHERE preset_key=?`, key).Scan(&n); err != nil {

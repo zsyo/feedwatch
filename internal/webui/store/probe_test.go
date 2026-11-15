@@ -43,7 +43,7 @@ func TestProbeWritableDirReportsHint(t *testing.T) {
 func TestOpenFailsBeforeTouchingDatabaseWhenDirIsUnwritable(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "nested", "feedwatch.db")
-	_, err := open(dbPath, nil, func(string, string) (*os.File, error) {
+	_, err := open(Config{Dialect: SQLite, DSN: dbPath}, nil, func(string, string) (*os.File, error) {
 		return nil, errors.New("permission denied")
 	})
 	if err == nil {

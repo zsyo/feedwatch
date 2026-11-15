@@ -5,7 +5,6 @@
 package api
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,7 +26,7 @@ type Ctx struct {
 }
 
 type Server struct {
-	db           *sql.DB
+	db           *store.DB
 	auth         *auth.Manager
 	assets       fs.FS
 	log          *slog.Logger

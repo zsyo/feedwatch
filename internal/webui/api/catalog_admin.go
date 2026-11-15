@@ -116,7 +116,7 @@ func (s *Server) adminCreateEntry(w http.ResponseWriter, r *http.Request, c Ctx)
 		return
 	}
 	now := store.Now()
-	res, err := tx.Exec(`INSERT INTO catalog_entries
+	id, err := tx.InsertID(`INSERT INTO catalog_entries
 		(url, url_key, name, category_id, description, homepage, source_type, enabled, created_by, created_at, updated_at)
 		VALUES (?,?,?,?,?,?,'atom',?,?,?,?)`,
 		fields.URL, fields.URLKey, fields.Name, req.CategoryID, fields.Description,
@@ -129,7 +129,6 @@ func (s *Server) adminCreateEntry(w http.ResponseWriter, r *http.Request, c Ctx)
 		fail(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	id, _ := res.LastInsertId()
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "id": id})
 }
 
@@ -325,9 +324,15 @@ func (s *Server) adminDeleteEntry(w http.ResponseWriter, r *http.Request, _ Ctx)
 	}
 	now := store.Now()
 	if presetKey != "" {
-		if _, err := tx.Exec(`INSERT INTO catalog_preset_state (preset_key, last_version, deleted, updated_at)
-			VALUES (?,0,1,?) ON CONFLICT(preset_key) DO UPDATE SET deleted=1, updated_at=excluded.updated_at`,
-			presetKey, now); err != nil {
+		// The tombstone always wins: deleted is set to 1 whether or not a state
+		// row exists yet. "Set a literal column" is not something the portable
+		// upsert helper can express, so the tail is spelled per dialect.
+		const insert = `INSERT INTO catalog_preset_state (preset_key, last_version, deleted, updated_at) VALUES (?,0,1,?)`
+		stmt := insert + ` ON CONFLICT(preset_key) DO UPDATE SET deleted=1, updated_at=excluded.updated_at`
+		if tx.Dialect() == store.MySQL {
+			stmt = insert + ` ON DUPLICATE KEY UPDATE deleted=1, updated_at=VALUES(updated_at)`
+		}
+		if _, err := tx.Exec(stmt, presetKey, now); err != nil {
 			fail(w, http.StatusInternalServerError, "db_error", err.Error())
 			return
 		}
@@ -439,7 +444,7 @@ func (s *Server) approveSubmission(w http.ResponseWriter, r *http.Request, c Ctx
 
 	now := store.Now()
 	if kind == "new" {
-		res, err := tx.Exec(`INSERT INTO catalog_entries
+		targetID, err = tx.InsertID(`INSERT INTO catalog_entries
 			(url, url_key, name, category_id, description, homepage, source_type, enabled, created_by, created_at, updated_at)
 			VALUES (?,?,?,?,?,?,'atom',1,?,?,?)`,
 			rawURL, urlKey, name, categoryID, description, homepage, submittedBy, now, now)
@@ -447,7 +452,6 @@ func (s *Server) approveSubmission(w http.ResponseWriter, r *http.Request, c Ctx
 			fail(w, http.StatusInternalServerError, "db_error", err.Error())
 			return
 		}
-		targetID, _ = res.LastInsertId()
 	} else {
 		if _, err := tx.Exec(`UPDATE catalog_entries SET
 			url=?, url_key=?, name=?, category_id=?, description=?, homepage=?, preset_edited=1, updated_at=? WHERE id=?`,
@@ -537,17 +541,16 @@ func (s *Server) createCategory(w http.ResponseWriter, r *http.Request, _ Ctx) {
 		return
 	}
 	now := store.Now()
-	res, err := s.db.Exec(`INSERT INTO catalog_categories (name, created_at, updated_at) VALUES (?,?,?)`,
+	id, err := s.db.InsertID(`INSERT INTO catalog_categories (name, created_at, updated_at) VALUES (?,?,?)`,
 		name, now, now)
 	if err != nil {
-		if strings.Contains(strings.ToUpper(err.Error()), "UNIQUE") {
+		if s.db.Dialect().IsUniqueViolation(err) {
 			fail(w, http.StatusConflict, "duplicate_category", "this category already exists")
 		} else {
 			fail(w, http.StatusInternalServerError, "db_error", err.Error())
 		}
 		return
 	}
-	id, _ := res.LastInsertId()
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "id": id})
 }
 
@@ -572,7 +575,7 @@ func (s *Server) renameCategory(w http.ResponseWriter, r *http.Request, _ Ctx) {
 	res, err := s.db.Exec(`UPDATE catalog_categories SET name=?, updated_at=? WHERE id=?`,
 		name, store.Now(), id)
 	if err != nil {
-		if strings.Contains(strings.ToUpper(err.Error()), "UNIQUE") {
+		if s.db.Dialect().IsUniqueViolation(err) {
 			fail(w, http.StatusConflict, "duplicate_category", "this category already exists")
 		} else {
 			fail(w, http.StatusInternalServerError, "db_error", err.Error())
@@ -725,7 +728,7 @@ func (s *Server) importCatalog(w http.ResponseWriter, r *http.Request, c Ctx) {
 	defer tx.Rollback()
 	now := store.Now()
 	for name := range categoryNames {
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO catalog_categories (name, created_at, updated_at) VALUES (?,?,?)`,
+		if _, err := tx.ExecIgnore(`INSERT INTO catalog_categories (name, created_at, updated_at) VALUES (?,?,?)`,
 			name, now, now); err != nil {
 			fail(w, http.StatusInternalServerError, "db_error", err.Error())
 			return

@@ -4,7 +4,6 @@ package orchestrator
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -33,7 +32,7 @@ const (
 // network request for ONE user's channel, so no user's api_key or provider
 // dashboard is shared with anybody else.
 type DeliveryWorker struct {
-	db          *sql.DB
+	db          *store.DB
 	reg         *notifier.Registry
 	sealer      *secrets.Sealer
 	spacing     time.Duration

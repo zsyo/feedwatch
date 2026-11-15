@@ -33,7 +33,7 @@ func TestSeedWritesPresetDefaults(t *testing.T) {
 		"presets.timeout":  DefaultPresetTimeout,
 	} {
 		var got string
-		if err := s.DB().QueryRow(`SELECT value FROM settings WHERE key=?`, key).Scan(&got); err != nil {
+		if err := s.DB().QueryRow(`SELECT value FROM settings WHERE setting_key=?`, key).Scan(&got); err != nil {
 			t.Fatal(err)
 		}
 		if got != want {
@@ -191,7 +191,7 @@ func TestSeedWritesBuiltInDefaults(t *testing.T) {
 	}
 	defaults := config.Default()
 	settings := map[string]string{}
-	rows, err := s.DB().Query("SELECT key, value FROM settings")
+	rows, err := s.DB().Query("SELECT setting_key, value FROM settings")
 	if err != nil {
 		t.Fatal(err)
 	}

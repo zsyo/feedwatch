@@ -3,10 +3,10 @@
 package orchestrator
 
 import (
-	"database/sql"
 	"fmt"
 
 	"feedwatch/internal/source"
+	"feedwatch/internal/webui/store"
 )
 
 type Subscription struct {
@@ -33,7 +33,7 @@ type ChannelRef struct {
 	ConfigJSON string
 }
 
-func loadSubscriptions(db *sql.DB) ([]Subscription, error) {
+func loadSubscriptions(db *store.DB) ([]Subscription, error) {
 	rows, err := db.Query(`SELECT s.id, s.user_id, s.url, s.url_key, s.display_name, s.source_type,
 		s.filter_json, s.notify_policy, u.notify_mode,
 		COALESCE(p.etag,''), COALESCE(p.last_modified,''), COALESCE(p.last_version,'')
@@ -58,7 +58,7 @@ func loadSubscriptions(db *sql.DB) ([]Subscription, error) {
 	return out, rows.Err()
 }
 
-func loadChannelIDs(db *sql.DB) (map[int64][]int64, error) {
+func loadChannelIDs(db *store.DB) (map[int64][]int64, error) {
 	rows, err := db.Query(`SELECT id, user_id FROM channels WHERE enabled=1 ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("orchestrator: load channels: %w", err)
@@ -77,7 +77,7 @@ func loadChannelIDs(db *sql.DB) (map[int64][]int64, error) {
 
 type seenSet map[string]map[string]struct{}
 
-func loadGlobalSeen(db *sql.DB) (seenSet, error) {
+func loadGlobalSeen(db *store.DB) (seenSet, error) {
 	rows, err := db.Query(`SELECT url_key, release_id FROM seen_ids`)
 	if err != nil {
 		return nil, err
@@ -99,7 +99,7 @@ func loadGlobalSeen(db *sql.DB) (seenSet, error) {
 
 type userSeenSet map[int64]map[string]map[string]struct{}
 
-func loadUserSeen(db *sql.DB) (userSeenSet, error) {
+func loadUserSeen(db *store.DB) (userSeenSet, error) {
 	rows, err := db.Query(`SELECT user_id, url_key, release_id FROM user_seen`)
 	if err != nil {
 		return nil, err
@@ -126,7 +126,7 @@ func loadUserSeen(db *sql.DB) (userSeenSet, error) {
 // commitFetch persists global fetch state in one transaction, completely
 // independently of notification delivery. A broken user channel therefore
 // cannot hold back seen IDs / ETags and cause duplicate pushes next cycle.
-func commitFetch(tx *sql.Tx, now string, subs []Subscription, results map[string]source.Result,
+func commitFetch(tx *store.Tx, now string, subs []Subscription, results map[string]source.Result,
 	seen seenSet) error {
 
 	byKey := make(map[string]Subscription)
@@ -135,7 +135,7 @@ func commitFetch(tx *sql.Tx, now string, subs []Subscription, results map[string
 	}
 	for key, res := range results {
 		s := byKey[key]
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO feed_pool (url_key, url, source_type) VALUES (?,?,?)`,
+		if _, err := tx.ExecIgnore(`INSERT INTO feed_pool (url_key, url, source_type) VALUES (?,?,?)`,
 			key, s.URL, s.SourceType); err != nil {
 			return fmt.Errorf("orchestrator: ensure feed_pool %q: %w", key, err)
 		}
@@ -152,7 +152,7 @@ func commitFetch(tx *sql.Tx, now string, subs []Subscription, results map[string
 			if _, ok := seen[key][r.ID]; ok {
 				continue
 			}
-			if _, err := tx.Exec(`INSERT OR IGNORE INTO seen_ids (url_key, release_id, seen_at) VALUES (?,?,?)`,
+			if _, err := tx.ExecIgnore(`INSERT INTO seen_ids (url_key, release_id, seen_at) VALUES (?,?,?)`,
 				key, r.ID, now); err != nil {
 				return fmt.Errorf("orchestrator: insert seen_id: %w", err)
 			}
@@ -173,9 +173,9 @@ func commitFetch(tx *sql.Tx, now string, subs []Subscription, results map[string
 	return nil
 }
 
-func insertUserSeen(tx *sql.Tx, userID int64, key string, ids []string, now string) error {
+func insertUserSeen(tx *store.Tx, userID int64, key string, ids []string, now string) error {
 	for _, id := range ids {
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO user_seen (user_id, url_key, release_id, seen_at) VALUES (?,?,?,?)`,
+		if _, err := tx.ExecIgnore(`INSERT INTO user_seen (user_id, url_key, release_id, seen_at) VALUES (?,?,?,?)`,
 			userID, key, id, now); err != nil {
 			return err
 		}
@@ -185,18 +185,14 @@ func insertUserSeen(tx *sql.Tx, userID int64, key string, ids []string, now stri
 
 // insertNotification stores a rendered notification with merge_key='pending'.
 // The delivery planner claims pending rows and turns them into merged groups.
-func insertNotification(tx *sql.Tx, cycleID string, r renderedNotification, now string) (int64, error) {
-	res, err := tx.Exec(`INSERT INTO notifications
-		(cycle_id, merge_key, kind, subject, "text", html, markdown, created_at)
+func insertNotification(tx *store.Tx, cycleID string, r renderedNotification, now string) (int64, error) {
+	return tx.InsertID(`INSERT INTO notifications
+		(cycle_id, merge_key, kind, subject, body, html, markdown, created_at)
 		VALUES (?,?,?,?,?,?,?,?)`, cycleID, "pending", r.Kind, r.Subject, r.Text, r.HTML, r.Markdown, now)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
 }
 
-func insertCycle(tx *sql.Tx, cycleID, now string, urls, notifications int) error {
-	_, err := tx.Exec(`INSERT OR REPLACE INTO cycles (id, started_at, urls, sent, failed) VALUES (?,?,?,?,?)`,
-		cycleID, now, urls, notifications, 0)
+func insertCycle(tx *store.Tx, cycleID, now string, urls, notifications int) error {
+	_, err := tx.ExecReplace(`INSERT INTO cycles (id, started_at, urls, sent, failed) VALUES (?,?,?,?,?)`,
+		"id", cycleID, now, urls, notifications, 0)
 	return err
 }
