@@ -12,7 +12,7 @@ const meta = ref<CatalogMeta | null>(null)
 const newCategory = ref('')
 const uncategorized = computed(() => meta.value?.uncategorized_label ?? '未分类')
 const description = computed(() =>
-  `用户提交和管理员新增都必须选择分类。删除分类时，该分类下的目录条目与申请会自动改为「${uncategorized.value}」，条目本身不会被删除。`)
+  `用户提交和管理员新增都必须选择分类。删除分类时，该分类下的订阅条目与申请会自动改为「${uncategorized.value}」，条目本身不会被删除。`)
 
 async function load(): Promise<void> {
   clearError()
@@ -56,7 +56,7 @@ async function renameCategory(row: CatalogCategory): Promise<void> {
 
 async function deleteCategory(row: CatalogCategory): Promise<void> {
   if (!window.confirm(
-    `删除分类「${row.name}」？该分类下的 ${row.entry_count} 个目录条目以及相关申请会统一改为「${uncategorized.value}」。`,
+    `删除分类「${row.name}」？该分类下的 ${row.entry_count} 个订阅条目以及相关申请会统一改为「${uncategorized.value}」。`,
   )) return
   clear()
   try {
@@ -78,7 +78,7 @@ async function deleteCategory(row: CatalogCategory): Promise<void> {
 
   <div class="card">
     <h2>分类（{{ categories.length }}）</h2>
-    <p class="card-sub">直接改名称后点「保存重命名」。目录条目数只统计启用与停用的模板，不代表实际订阅人数。</p>
+    <p class="card-sub">直接改名称后点「保存重命名」。订阅条目数只统计启用与停用的模板，不代表实际订阅人数。</p>
     <div class="catalog-toolbar">
       <label class="toolbar-field">新建分类名称
         <input v-model="newCategory" placeholder="例如：数据库" :maxlength="meta?.max_category_len" @keyup.enter="addCategory" />
@@ -87,7 +87,7 @@ async function deleteCategory(row: CatalogCategory): Promise<void> {
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>名称</th><th>目录条目数</th><th>操作</th></tr></thead>
+        <thead><tr><th>ID</th><th>名称</th><th>订阅条目数</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="row in categories" :key="row.id">
             <td class="mono">{{ row.id }}</td>
@@ -100,7 +100,7 @@ async function deleteCategory(row: CatalogCategory): Promise<void> {
               </div>
             </td>
           </tr>
-          <tr v-if="!categories.length"><td colspan="4" class="empty">还没有分类，先添加一个再到「目录条目」页添加链接。</td></tr>
+          <tr v-if="!categories.length"><td colspan="4" class="empty">还没有分类，先添加一个再到「订阅条目」页添加链接。</td></tr>
         </tbody>
       </table>
     </div>

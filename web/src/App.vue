@@ -23,7 +23,7 @@ const onLogin = computed(() => route.name === 'login')
 const adminNav: NavItem[] = [
   { to: '/', label: '概览' },
   { to: '/admin/users', label: '用户管理' },
-  { to: '/admin/catalog', label: '目录管理', children: catalogAdminPages },
+  { to: '/admin/catalog', label: '订阅管理', children: catalogAdminPages },
   { to: '/admin/pool', label: '轮询池' },
   { to: '/admin/ratelimit', label: '限速状态' },
   { to: '/admin/settings', label: '全局设置' },

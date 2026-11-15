@@ -141,7 +141,7 @@ async function subscribe(row: CatalogEntry): Promise<void> {
 
 async function cancel(row: CatalogEntry): Promise<void> {
   if (row.subscription_id === null) return
-  if (!window.confirm(`确定取消订阅「${row.name}」？目录条目会保留。`)) return
+  if (!window.confirm(`确定取消订阅「${row.name}」？订阅条目会保留。`)) return
   err.value = ''
   success.value = ''
   try {

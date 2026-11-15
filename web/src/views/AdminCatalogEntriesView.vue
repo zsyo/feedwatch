@@ -43,7 +43,7 @@ async function createEntry(): Promise<void> {
   try {
     await api.post('/api/admin/catalog', createDraft.value)
     createDraft.value = blankEntry()
-    done('目录条目已添加。管理员的添加与编辑不经过审核，立即生效。')
+    done('订阅条目已添加。管理员的添加与编辑不经过审核，立即生效。')
     await load()
   } catch (e) {
     fail(e)
@@ -102,11 +102,11 @@ async function toggleEnabled(row: CatalogEntry): Promise<void> {
 }
 
 async function removeEntry(row: CatalogEntry): Promise<void> {
-  if (!window.confirm(`删除目录条目「${row.name}」？只会删除这个模板并释放该 URL，已经订阅的用户不受影响。`)) return
+  if (!window.confirm(`删除订阅条目「${row.name}」？只会删除这个模板并释放该 URL，已经订阅的用户不受影响。`)) return
   clear()
   try {
     await api.del(`/api/admin/catalog/${row.id}`)
-    done('目录条目已删除。')
+    done('订阅条目已删除。')
     await load()
   } catch (e) {
     fail(e)
@@ -129,14 +129,14 @@ async function acceptRemote(row: CatalogEntry): Promise<void> {
 </script>
 
 <template>
-  <PageHeader title="目录条目" description="维护订阅中心里可用的链接模板。管理员的添加与编辑立即生效、不经过审核；编辑、停用或删除都不会改动用户已经复制过去的订阅。">
+  <PageHeader title="订阅条目" description="维护订阅中心里可用的链接模板（不是用户已订阅的记录）。管理员的添加与编辑立即生效、不经过审核；编辑、停用或删除都不会改动用户已经复制过去的订阅。">
     <button class="ghost" type="button" @click="load">刷新</button>
   </PageHeader>
   <Notice kind="error" :message="err" />
   <Notice kind="success" :message="success" />
 
   <div class="card">
-    <h2>手动添加目录条目</h2>
+    <h2>手动添加订阅条目</h2>
     <p class="card-sub">管理员是可信角色，这里的添加立即生效，不产生待审申请。链接只允许 http/https，且不能带账号密码或令牌类参数。</p>
     <form @submit.prevent="createEntry">
       <div class="form-row">
@@ -159,7 +159,7 @@ async function acceptRemote(row: CatalogEntry): Promise<void> {
   </div>
 
   <div class="card">
-    <h2>目录条目（{{ entries.length }}）</h2>
+    <h2>订阅条目（{{ entries.length }}）</h2>
     <p class="card-sub">停用只是从订阅中心隐藏，仍占用该 URL；删除才会释放 URL。「预设状态」里的 vN 是本地已应用的预设版本，<strong>不代表远程已有新版本</strong>；「未锁定」表示没手动改过、允许被更高版本覆盖，「已保护」表示你改过、同步会跳过，可点「解除保护」恢复。</p>
     <div class="table-wrap">
       <table>
@@ -215,7 +215,7 @@ async function acceptRemote(row: CatalogEntry): Promise<void> {
               </td>
             </tr>
           </template>
-          <tr v-if="!entries.length"><td colspan="9" class="empty">目录还是空的，可在上方手动添加，或在「导入导出」页载入备份、在「远程预设」页拉取预设。</td></tr>
+          <tr v-if="!entries.length"><td colspan="9" class="empty">订阅目录还是空的，可在上方手动添加，或在「导入导出」页载入备份、在「远程预设」页拉取预设。</td></tr>
         </tbody>
       </table>
     </div>

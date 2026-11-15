@@ -88,7 +88,7 @@ async function copyURL(row: CatalogSubmission): Promise<void> {
 </script>
 
 <template>
-  <PageHeader title="审核队列" description="用户提交的新增与更新申请都要在这里处理，通过后才写入目录；管理员自己在「目录条目」页添加或编辑不经过审核。驳回必须填写理由，提交者会看到。">
+  <PageHeader title="审核队列" description="用户提交的新增与更新申请都要在这里处理，通过后才写入订阅目录；管理员自己在「订阅条目」页添加或编辑不经过审核。驳回必须填写理由，提交者会看到。">
     <button class="ghost" type="button" @click="load">刷新</button>
   </PageHeader>
   <Notice kind="error" :message="err" />

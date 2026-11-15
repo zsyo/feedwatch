@@ -16,7 +16,7 @@ export interface CatalogAdminPage {
 // One sidebar entry per subpage. App.vue renders these as an indented group
 // only while the user is somewhere under /admin/catalog.
 export const catalogAdminPages: CatalogAdminPage[] = [
-  { to: '/admin/catalog/entries', label: '目录条目' },
+  { to: '/admin/catalog/entries', label: '订阅条目' },
   { to: '/admin/catalog/reviews', label: '审核队列' },
   { to: '/admin/catalog/categories', label: '分类管理' },
   { to: '/admin/catalog/transfer', label: '导入导出' },

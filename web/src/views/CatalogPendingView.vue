@@ -99,7 +99,7 @@ async function copyInfo(row: CatalogSubmission): Promise<void> {
 
   <div class="card">
     <h2>待审列表</h2>
-    <p class="card-sub">「新增申请」是尚未上架的链接；「更新申请」是对已有目录条目的修改建议，通过后才会生效。</p>
+    <p class="card-sub">「新增申请」是尚未上架的链接；「更新申请」是对已有订阅条目的修改建议，通过后才会生效。</p>
     <div class="table-wrap">
       <table>
         <thead><tr><th>类型</th><th>名称</th><th>分类</th><th>链接</th><th>提交者</th><th>时间</th><th>操作</th></tr></thead>

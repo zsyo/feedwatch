@@ -28,8 +28,8 @@ async function syncRemote(): Promise<void> {
 </script>
 
 <template>
-  <PageHeader title="远程预设" description="从「全局设置」配置的基址拉取 manifest 与分类 JSON，全量校验后在一个事务里写入。只应用版本更高的条目；本地缺失的会新增，你手动编辑过的会标为「已保护」并跳过。目录条目页的「未锁定 / 已保护」只反映本地锁定情况，不代表远程当前有新版本。">
-    <RouterLink to="/admin/catalog/entries" class="link-button">查看目录条目</RouterLink>
+  <PageHeader title="远程预设" description="从「全局设置」配置的基址拉取 manifest 与分类 JSON，全量校验后在一个事务里写入。只应用版本更高的条目；本地缺失的会新增，你手动编辑过的会标为「已保护」并跳过。订阅条目页的「未锁定 / 已保护」只反映本地锁定情况，不代表远程当前有新版本。">
+    <RouterLink to="/admin/catalog/entries" class="link-button">查看订阅条目</RouterLink>
   </PageHeader>
   <Notice kind="error" :message="err" />
   <Notice kind="success" :message="success" />
@@ -65,7 +65,7 @@ async function syncRemote(): Promise<void> {
           </tbody>
         </table>
       </div>
-      <p class="hint">同步后的版本号与锁定状态在「目录条目」页的「预设状态」列查看；「未锁定」不代表远程已有新版本，解除保护也在那一页操作。</p>
+      <p class="hint">同步后的版本号与锁定状态在「订阅条目」页的「预设状态」列查看；「未锁定」不代表远程已有新版本，解除保护也在那一页操作。</p>
     </div>
   </div>
 
@@ -75,7 +75,7 @@ async function syncRemote(): Promise<void> {
     <ul class="rule-list">
       <li>每条预设用稳定的 <code>preset_key</code> 标识，只有远程 <code>version</code> 大于本地版本才覆盖；相同版本或更旧版本一律跳过，不会把改过的配置倒退回去。</li>
       <li>「预设状态」列的 <code>vN</code> 是本地已应用的版本；「未锁定」只表示这条没被你改过、允许被更高版本覆盖，<strong>不代表远程现在有新版本</strong>。系统不会后台检查更新，只有点同步才比对版本。</li>
-      <li>管理员手动编辑过、或用户更新申请审核通过的条目会标为「已保护」，同步跳过；在「目录条目」页点「解除保护」可恢复为「未锁定」。</li>
+      <li>管理员手动编辑过、或用户更新申请审核通过的条目会标为「已保护」，同步跳过；在「订阅条目」页点「解除保护」可恢复为「未锁定」。</li>
       <li>本地已存在相同 URL 且从未编辑过的条目会被认领，随后按版本号正常升级，不会生成重复行。</li>
       <li>管理员删除过的预设会留下墓碑，之后的同步不会再把它加回来。</li>
       <li>所有文件先全量校验再一次性写入；任一文件失败或校验不通过，整批回滚，目录保持原样。</li>
