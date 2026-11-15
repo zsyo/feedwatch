@@ -237,13 +237,21 @@ func redactDSN(cfg store.Config) string {
 	}
 	dsn := cfg.DSN
 	// postgres://user:pass@host/db and user:pass@tcp(host)/db both put the
-	// secret between the first ':' and the last '@' before any '/'.
-	if at := strings.LastIndex(dsn, "@"); at > 0 {
-		if colon := strings.Index(dsn[:at], ":"); colon > 0 {
-			return dsn[:colon+1] + "***" + dsn[at:]
-		}
+	// secret between the colon after the user and the last '@'. The scheme, when
+	// present, also contains a colon, so the search starts after "://".
+	at := strings.LastIndex(dsn, "@")
+	if at < 0 {
+		return dsn
 	}
-	return dsn
+	start := 0
+	if i := strings.Index(dsn[:at], "://"); i >= 0 {
+		start = i + 3
+	}
+	colon := strings.Index(dsn[start:at], ":")
+	if colon < 0 {
+		return dsn // no password component
+	}
+	return dsn[:start+colon+1] + "***" + dsn[at:]
 }
 
 func runDeliveryLoop(ctx context.Context, st *store.Store, w *orchestrator.DeliveryWorker, log *slog.Logger) {
