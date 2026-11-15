@@ -15,9 +15,12 @@ import AdminSettingsView from './views/AdminSettingsView.vue'
 import AdminAuditView from './views/AdminAuditView.vue'
 import CatalogView from './views/CatalogView.vue'
 import CatalogPendingView from './views/CatalogPendingView.vue'
-import AdminCatalogView from './views/AdminCatalogView.vue'
 import AdminCatalogEntriesView from './views/AdminCatalogEntriesView.vue'
 import AdminCatalogReviewsView from './views/AdminCatalogReviewsView.vue'
+import AdminCatalogCategoriesView from './views/AdminCatalogCategoriesView.vue'
+import AdminCatalogTransferView from './views/AdminCatalogTransferView.vue'
+import AdminCatalogPresetsView from './views/AdminCatalogPresetsView.vue'
+import { catalogAdminHome } from './catalogAdmin'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -44,15 +47,15 @@ const router = createRouter({
     { path: '/catalog', name: 'catalog', component: CatalogView, meta: { member: true } },
     { path: '/catalog/pending', name: 'catalog-pending', component: CatalogPendingView, meta: { member: true } },
     { path: '/admin/users', name: 'admin-users', component: AdminUsersView, meta: { admin: true } },
-    { path: '/admin/catalog', name: 'admin-catalog', component: AdminCatalogView, meta: { admin: true } },
-    // Catalog administration is a group of focused subpages. The group entry
-    // above stays put so bookmarks and the dashboard shortcut keep working;
-    // every subpage has its own route and its own sidebar item.
+    // Catalog administration is a group of focused subpages. /admin/catalog
+    // stays as a compatibility redirect: old bookmarks, the dashboard shortcut
+    // and the sidebar group parent all land on the entry list.
+    { path: '/admin/catalog', redirect: catalogAdminHome, meta: { admin: true } },
     { path: '/admin/catalog/entries', name: 'admin-catalog-entries', component: AdminCatalogEntriesView, meta: { admin: true } },
     { path: '/admin/catalog/reviews', name: 'admin-catalog-reviews', component: AdminCatalogReviewsView, meta: { admin: true } },
-    { path: '/admin/catalog/categories', name: 'admin-catalog-categories', component: AdminCatalogView, meta: { admin: true } },
-    { path: '/admin/catalog/transfer', name: 'admin-catalog-transfer', component: AdminCatalogView, meta: { admin: true } },
-    { path: '/admin/catalog/presets', name: 'admin-catalog-presets', component: AdminCatalogView, meta: { admin: true } },
+    { path: '/admin/catalog/categories', name: 'admin-catalog-categories', component: AdminCatalogCategoriesView, meta: { admin: true } },
+    { path: '/admin/catalog/transfer', name: 'admin-catalog-transfer', component: AdminCatalogTransferView, meta: { admin: true } },
+    { path: '/admin/catalog/presets', name: 'admin-catalog-presets', component: AdminCatalogPresetsView, meta: { admin: true } },
     { path: '/admin/users/:id', name: 'admin-user-detail', component: AdminUserDetailView, meta: { admin: true } },
     { path: '/admin/pool', name: 'admin-pool', component: AdminPoolView, meta: { admin: true } },
     { path: '/admin/ratelimit', name: 'admin-ratelimit', component: AdminRateLimitView, meta: { admin: true } },
