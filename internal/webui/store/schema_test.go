@@ -155,7 +155,7 @@ func TestEveryDialectHasASchema(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", dialect, err)
 		}
-		if len(stmts) < 18 {
+		if len(stmts) < 21 {
 			t.Fatalf("%s declares only %d tables", dialect, len(stmts))
 		}
 	}

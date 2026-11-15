@@ -1,4 +1,4 @@
--- FeedWatch WebUI schema for MySQL 8.0.13+, version 7.
+-- FeedWatch WebUI schema for MySQL 8.0.13+, version 8.
 -- MySQL-only deviations from the SQLite twin, all deliberate:
 --   * TIMESTAMP-ish, URL and key columns are VARCHAR/CHAR, because InnoDB
 --     cannot index TEXT without a prefix length and TEXT cannot take a
@@ -233,4 +233,39 @@ CREATE TABLE IF NOT EXISTS catalog_preset_state (
   last_version INTEGER NOT NULL DEFAULT 0,
   deleted      INTEGER NOT NULL DEFAULT 0,
   updated_at   VARCHAR(40) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE IF NOT EXISTS user_identities (
+  id         INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id    INTEGER NOT NULL,
+  provider   VARCHAR(32) NOT NULL,
+  subject    VARCHAR(191) NOT NULL,
+  login      VARCHAR(191) NOT NULL DEFAULT '',
+  email      VARCHAR(255) NOT NULL DEFAULT '',
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL,
+  CONSTRAINT uq_user_identities_subject UNIQUE (provider, subject),
+  CONSTRAINT uq_user_identities_user UNIQUE (provider, user_id),
+  CONSTRAINT fk_user_identities_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE IF NOT EXISTS auth_providers (
+  provider      VARCHAR(32) NOT NULL PRIMARY KEY,
+  enabled       INTEGER NOT NULL DEFAULT 0,
+  client_id     VARCHAR(255) NOT NULL DEFAULT '',
+  client_secret VARCHAR(1024) NOT NULL DEFAULT '',
+  updated_at    VARCHAR(40) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE IF NOT EXISTS oauth_flows (
+  state_hash    CHAR(64) NOT NULL PRIMARY KEY,
+  provider      VARCHAR(32) NOT NULL,
+  mode          VARCHAR(16) NOT NULL DEFAULT 'login',
+  user_id       INTEGER NULL,
+  redirect      VARCHAR(512) NOT NULL DEFAULT '',
+  code_verifier VARCHAR(255) NOT NULL DEFAULT '',
+  created_at    VARCHAR(40) NOT NULL,
+  expires_at    VARCHAR(40) NOT NULL,
+  CONSTRAINT ck_oauth_flows_mode CHECK (mode IN ('login', 'bind')),
+  CONSTRAINT fk_oauth_flows_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;

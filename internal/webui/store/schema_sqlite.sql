@@ -1,4 +1,4 @@
--- FeedWatch WebUI schema for SQLite, version 7.
+-- FeedWatch WebUI schema for SQLite, version 8.
 -- Executed statement by statement by migrate.go; indexes are created there too
 -- (MySQL has no CREATE INDEX IF NOT EXISTS, so they cannot live in this file).
 -- Timestamp columns are RFC3339 UTC strings so they sort lexicographically.
@@ -227,4 +227,48 @@ CREATE TABLE IF NOT EXISTS catalog_preset_state (
   last_version INTEGER NOT NULL DEFAULT 0,
   deleted      INTEGER NOT NULL DEFAULT 0,
   updated_at   TEXT NOT NULL
+);
+
+-- ===== Third-party sign-in (v8) =====
+-- One row per linked account. The provider's numeric user id is the identity:
+-- a login name can be renamed upstream, the id cannot. Deleting the user takes
+-- the binding with it.
+CREATE TABLE IF NOT EXISTS user_identities (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider   TEXT NOT NULL,
+  subject    TEXT NOT NULL,
+  login      TEXT NOT NULL DEFAULT '',
+  email      TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  -- One binding per provider account, and at most one per provider per user.
+  UNIQUE (provider, subject),
+  UNIQUE (provider, user_id)
+);
+
+-- The OAuth app credentials, one row per provider. client_secret holds a
+-- sealed envelope (fwsec:v1:) and is never returned to the browser. A row
+-- exists as soon as the provider is configured; enabled=0 keeps the buttons
+-- off the login page without losing the credentials.
+CREATE TABLE IF NOT EXISTS auth_providers (
+  provider      TEXT PRIMARY KEY,
+  enabled       INTEGER NOT NULL DEFAULT 0,
+  client_id     TEXT NOT NULL DEFAULT '',
+  client_secret TEXT NOT NULL DEFAULT '',
+  updated_at    TEXT NOT NULL
+);
+
+-- A sign-in attempt in flight. The state is the bearer token in the callback
+-- URL, so only its hash is stored. mode='bind' carries the user id that started
+-- the flow; mode='login' has no user yet. Rows are single-use and expire.
+CREATE TABLE IF NOT EXISTS oauth_flows (
+  state_hash    TEXT PRIMARY KEY,
+  provider      TEXT NOT NULL,
+  mode          TEXT NOT NULL DEFAULT 'login',
+  user_id       INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  redirect      TEXT NOT NULL DEFAULT '',
+  code_verifier TEXT NOT NULL DEFAULT '',
+  created_at    TEXT NOT NULL,
+  expires_at    TEXT NOT NULL
 );

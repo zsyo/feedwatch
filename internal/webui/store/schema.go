@@ -12,7 +12,7 @@ import (
 // schemaVersion is the version this binary expects. It is recorded in the
 // schema_migrations table, and mirrored into PRAGMA user_version on SQLite so
 // databases created by 1.1.x keep migrating through the same path.
-const schemaVersion = 7
+const schemaVersion = 8
 
 //go:embed schema_sqlite.sql
 var schemaSQLite string
@@ -74,6 +74,11 @@ var schemaIndexes = []indexDef{
 	// The admin drill-down lists one user's recent deliveries newest first.
 	{Name: "idx_deliveries_user", Table: "deliveries", Columns: []string{"user_id", "id"}},
 	{Name: "idx_audit_ts", Table: "audit_log", Columns: []string{"ts"}},
+	// The settings page lists one user's linked accounts; the unique index on
+	// (provider, user_id) cannot serve a lookup that does not name the provider.
+	{Name: "idx_user_identities_user", Table: "user_identities", Columns: []string{"user_id"}},
+	// Expired sign-in attempts are purged on the same schedule as sessions.
+	{Name: "idx_oauth_flows_expires", Table: "oauth_flows", Columns: []string{"expires_at"}},
 	// Disabled entries still claim their URL: re-enable instead of
 	// re-submitting.
 	{
