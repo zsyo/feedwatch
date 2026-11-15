@@ -24,7 +24,7 @@ const success = ref('')
 const busy = ref(false)
 const keyword = ref('')
 const categoryFilter = ref('all')
-const sortBy = ref<'hot' | 'name' | 'category'>('hot')
+const sortBy = ref<'hot' | 'name' | 'time'>('hot')
 const sortDesc = ref(true)
 
 // id 0 is the backend's synthetic "uncategorized" bucket; it is not a real
@@ -35,7 +35,10 @@ const filtered = computed(() => {
   const needle = keyword.value.trim().toLowerCase()
   let rows = entries.value.filter(row => {
     if (needle) {
-      const haystack = [row.name, row.url, row.description, row.category_name].join(' ').toLowerCase()
+      // Category is deliberately not searchable: the filter control right next
+      // to this box already covers it, and matching it here made a keyword
+      // like "工具" return the whole category instead of name/URL matches.
+      const haystack = [row.name, row.url, row.description].join(' ').toLowerCase()
       if (!haystack.includes(needle)) return false
     }
     if (categoryFilter.value === 'none' && row.category_id !== null) return false
@@ -46,11 +49,11 @@ const filtered = computed(() => {
   // Array.sort puts a before b for a negative result, so descending needs -1.
   const dir = sortDesc.value ? -1 : 1
   rows = [...rows].sort((a, b) => {
-    if (sortBy.value === 'name') return dir * a.name.localeCompare(b.name, 'zh-CN')
-    if (sortBy.value === 'category') {
-      return dir * a.category_name.localeCompare(b.category_name, 'zh-CN') || a.name.localeCompare(b.name, 'zh-CN')
-    }
-    return dir * (a.subscriber_count - b.subscriber_count) || a.name.localeCompare(b.name, 'zh-CN')
+    if (sortBy.value === 'name') return dir * a.name.localeCompare(b.name, 'zh-CN') || a.id - b.id
+    // created_at is RFC 3339 with the same precision, so string order is
+    // chronological order — no Date parsing needed.
+    if (sortBy.value === 'time') return dir * a.created_at.localeCompare(b.created_at) || a.id - b.id
+    return dir * (a.subscriber_count - b.subscriber_count) || a.id - b.id
   })
   return rows
 })
@@ -193,7 +196,7 @@ async function copyProposal(row: CatalogSubmission): Promise<void> {
 
   <div class="catalog-toolbar">
     <label class="toolbar-field">关键字
-      <input v-model="keyword" placeholder="搜索名称、链接、简介或分类" />
+      <input v-model="keyword" placeholder="搜索名称、链接或简介" />
     </label>
     <label class="toolbar-field-narrow">分类
       <select v-model="categoryFilter">
@@ -206,8 +209,8 @@ async function copyProposal(row: CatalogSubmission): Promise<void> {
     <label class="toolbar-field-narrow">排序
       <select v-model="sortBy">
         <option value="hot">订阅人数</option>
+        <option value="time">收录时间</option>
         <option value="name">名称</option>
-        <option value="category">分类</option>
       </select>
     </label>
     <button class="ghost" type="button" @click="sortDesc = !sortDesc">{{ sortDesc ? '降序 ↓' : '升序 ↑' }}</button>
