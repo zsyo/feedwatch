@@ -62,7 +62,9 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 }
 .topbar-title { font-weight: 600; }
 .topbar-user { display: flex; align-items: center; gap: .8rem; font-size: .88rem; color: var(--muted); }
-.content { padding: 1.8rem; max-width: 1180px; width: 100%; }
+/* Fluid shell: tables and cards use the full width of the main column. Long
+   prose keeps its own ch-based measure instead of capping the whole page. */
+.content { padding: 1.8rem; width: 100%; }
 
 /* ---------- auth ---------- */
 .auth-screen { min-height: 100vh; display: grid; place-items: center; padding: 2rem; }
@@ -84,9 +86,15 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   padding: 1.25rem 1.4rem; margin-bottom: 1.2rem;
 }
 .card > h2 { margin: 0 0 .25rem; font-size: 1.02rem; }
-.card-sub { margin: 0 0 1rem; color: var(--muted); font-size: .84rem; }
+.card-sub { margin: 0 0 1rem; color: var(--muted); font-size: .84rem; max-width: 100ch; }
 .stack { display: grid; gap: 1.1rem; }
-.grid-2, .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+/* Fixed column counts keep two/three cards from being stretched into a sparse
+   multi-column row on a 2K screen (auto-fit folds empty tracks into the
+   surviving cards). No cap here: cards, stats and tables must share one left
+   and right edge, otherwise the dashboard looks ragged. */
+.grid-2, .grid-3 { display: grid; gap: 1rem; }
+.grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .8rem; }
 .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem; }
 .stat .label { display: block; color: var(--muted); font-size: .78rem; }
@@ -129,7 +137,7 @@ tbody tr:last-child td { border-bottom: none; }
 td .cell-actions { display: flex; gap: .35rem; flex-wrap: wrap; }
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .79rem; }
 .muted { color: var(--muted); }
-.hint { color: var(--muted); font-size: .8rem; margin: .5rem 0 0; }
+.hint { color: var(--muted); font-size: .8rem; margin: .5rem 0 0; max-width: 100ch; }
 .empty { color: var(--muted); font-size: .88rem; padding: .8rem 0; }
 
 .badge { display: inline-block; padding: .12rem .5rem; border-radius: 999px; font-size: .72rem; background: #eef2f6; color: #475467; }
@@ -294,9 +302,13 @@ button.small.is-active { background: var(--accent); border-color: var(--accent);
 }
 /* Short prose next to the sync button explains the version/protection rules
    without another cramped table on a page that otherwise has one action. */
-.rule-list { margin: .2rem 0 0; padding-left: 1.25rem; color: #475467; font-size: .84rem; line-height: 1.8; }
+.rule-list { margin: .2rem 0 0; padding-left: 1.25rem; color: #475467; font-size: .84rem; line-height: 1.8; max-width: 100ch; }
 .rule-list li + li { margin-top: .25rem; }
 .rule-list code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .8rem; }
+
+@media (max-width: 1100px) {
+  .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 
 @media (max-width: 800px) {
   .layout { grid-template-columns: 1fr; }
@@ -306,6 +318,7 @@ button.small.is-active { background: var(--accent); border-color: var(--accent);
   .nav-subitem { margin-left: 0; padding-left: .6rem; }
   .brand { border: none; padding: 0; }
   .content { padding: 1rem; }
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
   /* Stack the page header on narrow screens: keeping the row flex squeezed
      the action button into a two-character-wide column ("刷 / 新"). */
   .page-header { flex-direction: column; align-items: flex-start; }
