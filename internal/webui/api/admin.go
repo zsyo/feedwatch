@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -113,6 +114,11 @@ var informationalSettings = []string{"notify.mode"}
 // effect immediately and the page that owns them shows the provider forms next
 // to the switch, which this read-only table cannot.
 var authManagedSettings = []string{settingAllowRegistration}
+
+// githubManagedSettings live in the settings table but are edited on their own
+// card, never in the generic table: github.token holds a sealed credential and
+// must not be echoed, github.graphql is its read-at-startup companion switch.
+var githubManagedSettings = []string{"github.token", "github.graphql"}
 
 // readonlyDocs covers the three keys the UI must not edit (see the comment on
 // editableSettings). They still deserve a purpose line of their own.
@@ -543,6 +549,9 @@ func (s *Server) settingsResponse() map[string]any {
 		for result.Next() {
 			var key, value, updated string
 			if result.Scan(&key, &value, &updated) == nil {
+				if slices.Contains(githubManagedSettings, key) {
+					continue // sealed credential + its switch are edited elsewhere
+				}
 				_, editable := editableSettings[key]
 				rows = append(rows, map[string]any{
 					"key": key, "value": value, "updated_at": updated, "editable": editable,
@@ -552,13 +561,14 @@ func (s *Server) settingsResponse() map[string]any {
 		result.Close()
 	}
 	return map[string]any{
-		"settings":      rows,
-		"docs":          settingDocs(),
-		"env_only":      envOnlySettings,
-		"informational": informationalSettings,
-		"auth_managed":  authManagedSettings,
-		"applies":       "restart",
-		"note":          settingsApplyNote,
+		"settings":       rows,
+		"docs":           settingDocs(),
+		"env_only":       envOnlySettings,
+		"informational":  informationalSettings,
+		"auth_managed":   authManagedSettings,
+		"github_managed": githubManagedSettings,
+		"applies":        "restart",
+		"note":           settingsApplyNote,
 	}
 }
 

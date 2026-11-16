@@ -77,6 +77,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("GET /api/admin/settings", s.handle(accessAdmin, false, s.adminGetSettings))
 	mux.Handle("PUT /api/admin/settings", s.handle(accessAdmin, false, s.adminPutSettings))
 	// Sign-in policy: the registration switch plus one row per provider.
+	mux.Handle("GET /api/admin/github-token", s.handle(accessAdmin, false, s.adminGetGithubToken))
+	mux.Handle("PUT /api/admin/github-token", s.handle(accessAdmin, false, s.adminPutGithubToken))
 	mux.Handle("GET /api/admin/auth", s.handle(accessAdmin, false, s.adminGetAuth))
 	mux.Handle("PUT /api/admin/auth", s.handle(accessAdmin, false, s.adminPutAuth))
 	mux.Handle("DELETE /api/admin/auth/{provider}", s.handle(accessAdmin, false, s.adminClearProvider))
