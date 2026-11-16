@@ -77,8 +77,8 @@ onMounted(load)
       <div class="stat"><span class="label">我的订阅</span><span class="value">{{ subs.length }}</span></div>
       <div class="stat"><span class="label">我的通知方式</span><span class="value">{{ channels.length }}</span></div>
     </template>
-    <div class="stat"><span class="label">版本</span><span class="value" style="font-size: 1.1rem">{{ meta.version || 'dev' }}</span></div>
-    <div class="stat"><span class="label">前端构建</span><span class="value mono" style="font-size: .9rem">{{ meta.build_id || 'dev' }}</span></div>
+    <div class="stat"><span class="label">版本</span><span class="value">{{ meta.version || 'dev' }}</span></div>
+    <div class="stat"><span class="label">前端构建</span><span class="value mono">{{ meta.build_id || 'dev' }}</span></div>
   </div>
 
   <div class="grid-2">
