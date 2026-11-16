@@ -360,6 +360,26 @@ func run() error {
 		FetchSpacing:     cfg.Poll.RequestSpacing.D(),
 	}, log)
 
+	// Optional GraphQL batch channel: with a token and FEEDWATCH_GITHUB_GRAPHQL=1,
+	// all GitHub repos in this process are prefetched once per cycle. Without
+	// either, every source keeps using REST conditional requests.
+	if envBool("FEEDWATCH_GITHUB_GRAPHQL") {
+		token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+		batch := githubsource.NewGraphQLBatchFetcher(token, nil, log)
+		if batch == nil {
+			log.Warn("github: GraphQL batch requested but GITHUB_TOKEN is unset; using REST")
+		} else {
+			sources := make([]source.Source, 0, len(tasks))
+			for _, task := range tasks {
+				sources = append(sources, task.Source)
+			}
+			w.SetPrefetch(func(ctx context.Context) context.Context {
+				return githubsource.PrefetchInto(ctx, batch, sources)
+			})
+			log.Info("github: GraphQL batch channel enabled", "repositories", len(sources))
+		}
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if *once {

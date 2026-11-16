@@ -45,6 +45,16 @@ type Watcher struct {
 	log       *slog.Logger
 	now       func() time.Time // injectable for deterministic tests
 	fetchGate *pace.Gate       // shared by every feed in every cycle
+	// prefetch, when set, runs once at the start of every cycle before the
+	// parallel fetch loop. It gets the cycle context and returns a derived one
+	// (typically carrying a per-cycle batch cache). The composition root wires
+	// this so watcher stays unaware of any concrete source implementation.
+	prefetch func(context.Context) context.Context
+}
+
+// SetPrefetch installs an optional per-cycle prefetch hook.
+func (w *Watcher) SetPrefetch(f func(context.Context) context.Context) {
+	w.prefetch = f
 }
 
 func New(tasks []FeedTask, st store.StateStore, n notifier.Notifier, opt Options, log *slog.Logger) *Watcher {
@@ -100,6 +110,10 @@ func (w *Watcher) RunOnce(ctx context.Context) error {
 	}
 	now := w.now().UTC()
 
+	// Prefetch runs before the fetch workers and outside any store transaction.
+	if w.prefetch != nil {
+		pollCtx = w.prefetch(pollCtx)
+	}
 	outs := w.fetchAll(pollCtx, state)
 	if firstRun {
 		return w.baseline(pollCtx, &state, outs, now)

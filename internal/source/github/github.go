@@ -172,6 +172,17 @@ func (s *Source) Limit() int { return s.limit }
 func (s *Source) APIPath() string { return s.url }
 
 func (s *Source) Fetch(ctx context.Context, since source.Cursor) (source.Result, error) {
+	// Optional GraphQL batch channel: when this cycle prefetched our repo, use
+	// those nodes instead of a REST request. A missing or errored entry falls
+	// through to REST. GraphQL has no ETag/304, so the result deliberately
+	// leaves the cursor untouched rather than clearing a valid REST validator.
+	if cache := CacheFrom(ctx); cache != nil {
+		if res, _, ok := cache.Get(s.repo); ok {
+			releases := parseGraphQL(res.Nodes, s.name, s.scope, s.policy, s.limit)
+			s.log.Debug("github releases served from batch cache", "repo", s.repo, "releases", len(releases))
+			return source.Result{Releases: releases}, nil
+		}
+	}
 	var lastErr error
 	var retryAfter time.Duration
 	for attempt := 0; attempt <= s.retryMax; attempt++ {
