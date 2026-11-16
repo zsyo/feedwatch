@@ -145,3 +145,22 @@ feeds:
     enabled: true
     filter:
       stable_only: true
+
+  # GitHub Releases via the REST API: for repositories without a releases.atom.
+  # The URL is "owner/repo" (or a full https://github.com/owner/repo URL).
+  - name: example/github-app
+    type: github
+    url: example/github-app
+    enabled: false                    # flip to true after replacing the example owner/repo
+    filter:
+      # GitHub uses its own is_prerelease/is_draft flags; stable_only below is
+      # ignored for github sources. Use options.release_scope instead.
+      stable_only: true
+    options:
+      # release_scope: stable (default) | prerelease | all
+      release_scope: stable
+      # Optional: anonymous access allows 60 requests/hour; a token raises it
+      # to 5000. The GraphQL batch channel (FEEDWATCH_GITHUB_GRAPHQL=1) needs it.
+      # token: ${GITHUB_TOKEN}
+      # content_policy: none | text (default, ~200 chars) | html
+      content_policy: text

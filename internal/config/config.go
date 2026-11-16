@@ -332,7 +332,10 @@ func (c Config) Validate(dryRun bool) error {
 		if strings.TrimSpace(f.URL) == "" {
 			return fmt.Errorf("feed %q: url is required", f.Name)
 		}
-		if !strings.HasPrefix(f.URL, "http://") && !strings.HasPrefix(f.URL, "https://") {
+		// GitHub releases sources use an "owner/repo" identifier rather than an
+		// absolute URL. The composition root normalises and validates it via
+		// github.NormalizeRepo; config itself stays free of source dependencies.
+		if f.Type != "github" && !strings.HasPrefix(f.URL, "http://") && !strings.HasPrefix(f.URL, "https://") {
 			return fmt.Errorf("feed %q: url must start with http:// or https://", f.Name)
 		}
 		if f.Type == "" {

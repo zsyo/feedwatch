@@ -79,7 +79,7 @@ func dryRunStatePath(p string) string {
 	return strings.TrimSuffix(p, ext) + ".dryrun" + ext
 }
 
-func feedOptions(f config.FeedConfig, http config.HTTPConfig) map[string]string {
+func feedOptions(f config.FeedConfig, http config.HTTPConfig) (map[string]string, []string) {
 	opts := map[string]string{
 		"http_timeout":     http.Timeout.String(),
 		"retry_max":        strconv.Itoa(http.RetryMax),
@@ -89,7 +89,10 @@ func feedOptions(f config.FeedConfig, http config.HTTPConfig) map[string]string 
 	}
 	// Per-feed options override the global HTTP defaults.
 	maps.Copy(opts, f.Options)
-	return opts
+	// ${ENV_VAR} placeholders (e.g. github's token) resolve here, the same
+	// place channel options are expanded. Missing variables are returned so
+	// the composition root can fail fast instead of sending half-empty creds.
+	return config.ExpandEnvRefs(opts)
 }
 
 // channelSpecs is the only place that knows how YAML channels map to the
@@ -312,17 +315,35 @@ func run() error {
 		if !f.Enabled {
 			continue
 		}
+		opts, missing := feedOptions(f, cfg.HTTP)
+		if len(missing) > 0 {
+			return fmt.Errorf("feed %q: unset environment variables: %s", f.Name, strings.Join(missing, ", "))
+		}
+		url := f.URL
+		if githubsource.IsValidSourceType(f.Type) {
+			normalized, err := githubsource.NormalizeRepo(url)
+			if err != nil {
+				return fmt.Errorf("feed %q: %w", f.Name, err)
+			}
+			url = normalized
+		}
 		src, err := srcReg.Build(source.SourceSpec{
-			Name: f.Name, Type: f.Type, URL: f.URL, Options: feedOptions(f, cfg.HTTP),
+			Name: f.Name, Type: f.Type, URL: url, Options: opts,
 		}, log)
 		if err != nil {
 			return fmt.Errorf("build source %q: %w", f.Name, err)
 		}
+		// GitHub sources carry authoritative prerelease/draft flags and apply
+		// their own stable/prerelease/all scope. Letting the title heuristic
+		// re-judge IsStable would mislabel releases with human-readable names.
+		trustStability := githubsource.IsValidSourceType(f.Type)
+		stableOnly := f.Filter.StableOnly && !trustStability
 		flt, err := filter.New(filter.Rules{
-			StableOnly:     f.Filter.StableOnly,
-			Include:        f.Filter.Include,
-			Exclude:        f.Filter.Exclude,
-			VersionPattern: f.Filter.VersionPattern,
+			StableOnly:           stableOnly,
+			TrustSourceStability: trustStability,
+			Include:              f.Filter.Include,
+			Exclude:              f.Filter.Exclude,
+			VersionPattern:       f.Filter.VersionPattern,
 		})
 		if err != nil {
 			return fmt.Errorf("build filter for %q: %w", f.Name, err)

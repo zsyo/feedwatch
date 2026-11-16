@@ -159,6 +159,30 @@ func TestValidateRejectsBadConfig(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsOwnerRepoForGithubSources(t *testing.T) {
+	body := `notify:
+  channels:
+    - type: log
+feeds:
+  - name: golang/go
+    type: github
+    url: golang/go
+`
+	c, err := Load(writeConfig(t, body), Overrides{})
+	if err != nil {
+		t.Fatalf("github sources use owner/repo, not an absolute URL: %v", err)
+	}
+	if len(c.Feeds) != 1 || c.Feeds[0].URL != "golang/go" {
+		t.Fatalf("unexpected feeds: %+v", c.Feeds)
+	}
+	// The same non-URL identifier is still rejected for atom feeds.
+	body = strings.Replace(body, "type: github", "type: atom", 1)
+	if _, err := Load(writeConfig(t, body), Overrides{}); err == nil ||
+		!strings.Contains(err.Error(), "must start with http") {
+		t.Fatalf("atom must still require an absolute URL, got %v", err)
+	}
+}
+
 func TestEmailRequiresAPIKeyUnlessDryRun(t *testing.T) {
 	body := `
 notify:
