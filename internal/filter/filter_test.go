@@ -168,6 +168,45 @@ func TestCompareVersion(t *testing.T) {
 	}
 }
 
+func TestTrustSourceStabilityPreservesAuthoritativeFlag(t *testing.T) {
+	// GitHub sources set IsStable from is_prerelease and set StableOnly=false;
+	// the title may still contain an "rc" suffix because that is the real
+	// release name. Keeping the source flag is the whole point of this rule.
+	f, err := New(Rules{StableOnly: false, TrustSourceStability: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		title    string
+		isStable bool
+	}{
+		{"v2.1.0-rc.1", false},
+		{"Version 2.0", true},
+		{"v3.0.0-beta.2", false},
+	}
+	for _, tc := range cases {
+		r, ok := f.Keep(domain.Release{Title: tc.title, ID: "id", IsStable: tc.isStable})
+		if !ok {
+			t.Errorf("Keep(%q) dropped a release that the source accepted", tc.title)
+			continue
+		}
+		if r.IsStable != tc.isStable {
+			t.Errorf("Keep(%q) IsStable = %v, want %v", tc.title, r.IsStable, tc.isStable)
+		}
+	}
+}
+
+func TestTrustSourceStabilityOffKeepsLegacyBehavior(t *testing.T) {
+	f, err := New(Rules{StableOnly: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok := f.Keep(domain.Release{Title: "v2.1.0-rc.1", ID: "id", IsStable: true})
+	if !ok || r.IsStable {
+		t.Errorf("without trust, the title heuristic must win: ok=%v stable=%v", ok, r.IsStable)
+	}
+}
+
 func TestInvalidRegexFailsAtConstruction(t *testing.T) {
 	for _, r := range []Rules{
 		{StableOnly: true, VersionPattern: "("},

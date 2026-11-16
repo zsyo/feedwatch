@@ -14,10 +14,15 @@ import (
 )
 
 type Rules struct {
-	StableOnly     bool
-	Include        []string
-	Exclude        []string
-	VersionPattern string
+	StableOnly bool
+	// TrustSourceStability leaves Release.IsStable as set by the source.
+	// GitHub releases carry authoritative is_prerelease/is_draft flags and
+	// apply their own stable/prerelease/all scope, so inferring stability from
+	// the human-readable title would both mislabel and re-filter them.
+	TrustSourceStability bool
+	Include              []string
+	Exclude              []string
+	VersionPattern       string
 }
 
 // GitHub release titles are human-readable, not bare version strings, e.g.
@@ -58,10 +63,11 @@ type Filter interface {
 }
 
 type compiled struct {
-	stableOnly bool
-	versionRe  *regexp.Regexp
-	include    []*regexp.Regexp
-	exclude    []*regexp.Regexp
+	stableOnly           bool
+	trustSourceStability bool
+	versionRe            *regexp.Regexp
+	include              []*regexp.Regexp
+	exclude              []*regexp.Regexp
 }
 
 func compileAll(patterns []string, label string) ([]*regexp.Regexp, error) {
@@ -104,10 +110,11 @@ func New(r Rules) (Filter, error) {
 		return nil, err
 	}
 	return &compiled{
-		stableOnly: r.StableOnly,
-		versionRe:  versionRe,
-		include:    include,
-		exclude:    exclude,
+		stableOnly:           r.StableOnly,
+		trustSourceStability: r.TrustSourceStability,
+		versionRe:            versionRe,
+		include:              include,
+		exclude:              exclude,
 	}, nil
 }
 
@@ -170,7 +177,9 @@ func (f *compiled) Keep(r domain.Release) (domain.Release, bool) {
 	if title == "" {
 		return r, false
 	}
-	r.IsStable = looksStable(title)
+	if !f.trustSourceStability {
+		r.IsStable = looksStable(title)
+	}
 
 	matches := f.versionRe.FindAllStringSubmatchIndex(title, -1)
 	if f.stableOnly && len(matches) == 0 {
