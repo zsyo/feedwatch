@@ -19,6 +19,7 @@ import (
 
 	"feedwatch/internal/source"
 	atomsource "feedwatch/internal/source/atom"
+	githubsource "feedwatch/internal/source/github"
 	"feedwatch/internal/webui"
 	"feedwatch/internal/webui/api"
 	"feedwatch/internal/webui/auth"
@@ -105,6 +106,7 @@ func runWebUI(cfgPath, logLevel, logFormat string, once, dryRun bool) error {
 
 	srcReg := source.NewRegistry()
 	srcReg.Register("atom", atomsource.New)
+	srcReg.Register(githubsource.SourceType, githubsource.New)
 	fetchOpts := orchestrator.HTTPFetcherOptions(
 		dur("http.timeout", 15*time.Second).String(),
 		settings["http.user_agent"],
@@ -113,6 +115,24 @@ func runWebUI(cfgPath, logLevel, logFormat string, once, dryRun bool) error {
 		boolVal("http.conditional", true),
 	)
 	fetcher := orchestrator.NewRegistryFetcher(srcReg, fetchOpts, log)
+
+	// The optional GitHub token is stored sealed in settings. A damaged
+	// envelope degrades to anonymous REST access (60 req/h) rather than
+	// refusing to start the whole WebUI.
+	var githubToken string
+	if sealed := strings.TrimSpace(settings[secrets.GithubTokenSettingKey]); sealed != "" {
+		plain, err := sealer.Open(sealed, secrets.GithubTokenAAD())
+		if err != nil {
+			log.Error("webui: cannot decrypt GitHub token; GitHub sources will use anonymous REST", "error", err)
+		} else {
+			githubToken = strings.TrimSpace(string(plain))
+		}
+	}
+	if githubToken != "" {
+		fetcher = fetcher.WithGitHubCredentials(githubToken, nil)
+		log.Info("webui: GitHub token configured", "requests_per_hour", 5000)
+	}
+
 	orch := orchestrator.New(st, fetcher, orchestrator.Options{
 		Interval:         dur("poll.interval", 30*time.Minute),
 		Timeout:          dur("poll.timeout", 2*time.Minute),
@@ -120,6 +140,15 @@ func runWebUI(cfgPath, logLevel, logFormat string, once, dryRun bool) error {
 		FetchSpacing:     dur("poll.request_spacing", 100*time.Millisecond),
 		SubjectPrefix:    settings["notify.subject_prefix"],
 	}, log)
+	if boolVal("github.graphql", false) {
+		batch := githubsource.NewGraphQLBatchFetcher(githubToken, nil, log)
+		if batch == nil {
+			log.Warn("webui: GraphQL batch requested but no GitHub token is configured; using REST")
+		} else {
+			orch.SetBatchFetcher(batch)
+			log.Info("webui: GitHub GraphQL batch channel enabled")
+		}
+	}
 	worker := orchestrator.NewDeliveryWorker(st, log, dur("notify.send_spacing", 250*time.Millisecond), sealer)
 
 	assets, err := webui.Assets()

@@ -162,6 +162,17 @@ func ChannelAAD(id int64) []byte {
 	return []byte("feedwatch:channel:" + fmt.Sprint(id))
 }
 
+// GithubTokenAAD binds the single, process-wide GitHub token to its purpose.
+// Unlike channel secrets there is no row id: the token is shared by every
+// GitHub subscription in this installation.
+func GithubTokenAAD() []byte {
+	return []byte("feedwatch:github-token")
+}
+
+// GithubTokenSettingKey is where the sealed token lives in the settings table.
+// It is read at startup and must never be echoed back to the UI.
+const GithubTokenSettingKey = "github.token"
+
 // LoadOrCreate resolves the master key: environment variable first, then
 // <dir>/secret.key, then a freshly generated file. Any read failure is fatal —
 // regenerating would silently orphan every stored credential.

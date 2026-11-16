@@ -8,10 +8,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"feedwatch/internal/domain"
 	"feedwatch/internal/source"
+	githubsource "feedwatch/internal/source/github"
 )
 
 type userAccumulator struct {
@@ -60,6 +62,32 @@ func (o *Orchestrator) RunOnce(ctx context.Context) error {
 		return fmt.Errorf("orchestrator: load user seen: %w", err)
 	}
 
+	// Optional GraphQL batch channel: prefetch every distinct GitHub repo once
+	// per cycle before the parallel fetch loop. This happens outside any
+	// transaction, so the single SQLite connection is never held across HTTP.
+	if o.batch != nil {
+		repos := make([]string, 0, len(subs))
+		seenRepo := make(map[string]struct{}, len(subs))
+		for _, s := range subs {
+			if !githubsource.IsValidSourceType(s.SourceType) {
+				continue
+			}
+			repo := strings.TrimPrefix(s.URL, githubsource.StoredPrefix)
+			if _, ok := seenRepo[repo]; ok {
+				continue
+			}
+			seenRepo[repo] = struct{}{}
+			repos = append(repos, repo)
+		}
+		if len(repos) > 0 {
+			cache := githubsource.NewCache()
+			for repo, result := range o.batch.Prefetch(ctx, repos) {
+				cache.Put(repo, result)
+			}
+			ctx = githubsource.WithCache(ctx, cache)
+		}
+	}
+
 	// One fetch per URL, regardless of how many users subscribe to it.
 	unique := make(map[string]Subscription)
 	order := make([]string, 0, len(subs))
@@ -80,9 +108,10 @@ func (o *Orchestrator) RunOnce(ctx context.Context) error {
 				return err
 			}
 		}
-		res, fetchErr := o.fetcher.Fetch(ctx, entry.URL, source.Cursor{
-			ETag: entry.PoolETag, LastModified: entry.PoolLastModified,
-		})
+		res, fetchErr := o.fetcher.Fetch(ctx, entry.URL, entry.SourceType,
+			releaseScopeFrom(entry.FilterJSON), source.Cursor{
+				ETag: entry.PoolETag, LastModified: entry.PoolLastModified,
+			})
 		if release != nil {
 			release()
 		}
@@ -101,7 +130,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context) error {
 		if !ok {
 			continue // failed fetch: do not advance this user's baseline
 		}
-		flt, err := filterFor(s.FilterJSON)
+		flt, err := filterFor(s.FilterJSON, s.SourceType)
 		if err != nil {
 			o.log.Warn("webui: invalid subscription filter", "id", s.ID, "error", err)
 			continue

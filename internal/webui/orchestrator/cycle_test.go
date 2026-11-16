@@ -29,7 +29,7 @@ type fakeFetcher struct {
 	errs    map[string]error
 }
 
-func (f *fakeFetcher) Fetch(_ context.Context, url string, _ source.Cursor) (source.Result, error) {
+func (f *fakeFetcher) Fetch(_ context.Context, url, _, _ string, _ source.Cursor) (source.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, url)

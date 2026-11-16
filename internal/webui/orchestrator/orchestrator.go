@@ -10,24 +10,30 @@ package orchestrator
 import (
 	"context"
 	"log/slog"
+	"maps"
+	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"feedwatch/internal/pace"
 	"feedwatch/internal/source"
+	githubsource "feedwatch/internal/source/github"
 	"feedwatch/internal/webui/store"
 )
 
 // Fetcher is the one network seam of the cycle. Tests inject a fake; production
 // uses RegistryFetcher so a new source type still only needs a Register call.
 type Fetcher interface {
-	Fetch(ctx context.Context, url string, cursor source.Cursor) (source.Result, error)
+	Fetch(ctx context.Context, url, sourceType, releaseScope string, cursor source.Cursor) (source.Result, error)
 }
 
 type RegistryFetcher struct {
-	reg  *source.Registry
-	opts map[string]string
-	log  *slog.Logger
+	reg    *source.Registry
+	opts   map[string]string
+	token  string
+	client *http.Client
+	log    *slog.Logger
 }
 
 func NewRegistryFetcher(reg *source.Registry, opts map[string]string, log *slog.Logger) RegistryFetcher {
@@ -37,9 +43,39 @@ func NewRegistryFetcher(reg *source.Registry, opts map[string]string, log *slog.
 	return RegistryFetcher{reg: reg, opts: opts, log: log}
 }
 
-func (f RegistryFetcher) Fetch(ctx context.Context, url string, cursor source.Cursor) (source.Result, error) {
+// WithGitHubCredentials attaches the optional global GitHub token. It returns
+// a copy so callers can build one fetcher per process without mutating a shared
+// value after the poll loop has started.
+func (f RegistryFetcher) WithGitHubCredentials(token string, client *http.Client) RegistryFetcher {
+	f.token = token
+	f.client = client
+	return f
+}
+
+func (f RegistryFetcher) Fetch(ctx context.Context, url, sourceType, releaseScope string, cursor source.Cursor) (source.Result, error) {
+	typ := sourceType
+	if typ == "" {
+		typ = "atom"
+	}
+	// GitHub subscriptions store "github:owner/repo" as their URL so they can
+	// share the atom url_key namespace. The source expects the bare repo id.
+	specURL := url
+	if githubsource.IsValidSourceType(typ) {
+		specURL = strings.TrimPrefix(specURL, githubsource.StoredPrefix)
+	}
+	opts := f.opts
+	if githubsource.IsValidSourceType(typ) {
+		opts = make(map[string]string, len(f.opts)+2)
+		maps.Copy(opts, f.opts)
+		if f.token != "" {
+			opts["token"] = f.token
+		}
+		if releaseScope != "" {
+			opts["release_scope"] = releaseScope
+		}
+	}
 	src, err := f.reg.Build(source.SourceSpec{
-		Name: url, Type: "atom", URL: url, Options: f.opts,
+		Name: url, Type: typ, URL: specURL, Options: opts, Client: f.client,
 	}, f.log)
 	if err != nil {
 		return source.Result{}, err
@@ -47,7 +83,10 @@ func (f RegistryFetcher) Fetch(ctx context.Context, url string, cursor source.Cu
 	return src.Fetch(ctx, cursor)
 }
 
-// HTTPFetcherOptions builds the atom source options from the DB settings.
+// HTTPFetcherOptions builds the shared source options from the DB settings.
+// Source-specific values (GitHub's token and release_scope) are added later:
+// the token comes from the encrypted admin setting, and release_scope from
+// each subscription's filter_json via the batch cache / source factory.
 func HTTPFetcherOptions(timeout, userAgent string, retryMax int, retryBaseDelay string, conditional bool) map[string]string {
 	return map[string]string{
 		"http_timeout":     timeout,
@@ -89,7 +128,13 @@ type Orchestrator struct {
 	opt     Options
 	log     *slog.Logger
 	now     func() time.Time
+	// batch is the optional GitHub GraphQL prefetcher. nil means every
+	// subscription uses REST (the default when no token is configured).
+	batch githubsource.BatchFetcher
 }
+
+// SetBatchFetcher enables the per-cycle GraphQL prefetch channel.
+func (o *Orchestrator) SetBatchFetcher(b githubsource.BatchFetcher) { o.batch = b }
 
 func New(st *store.Store, f Fetcher, opt Options, log *slog.Logger) *Orchestrator {
 	if log == nil {
