@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -179,7 +180,7 @@ func runWebUI(cfgPath, logLevel, logFormat string, once, dryRun bool) error {
 		shutdownErr <- httpServer.Shutdown(shutdownCtx)
 	}()
 
-	log.Info("webui: listening", "addr", addr, "driver", dbCfg.Dialect.String(), "db", redactDSN(dbCfg),
+	log.Info("webui: listening", "addr", addr, "url", listeningURL(addr), "driver", dbCfg.Dialect.String(), "db", redactDSN(dbCfg),
 		"poll_interval", dur("poll.interval", 30*time.Minute).String(),
 		"send_spacing", dur("notify.send_spacing", 250*time.Millisecond).String(),
 		"session_ttl", ttl.String(), "cookie_secure", secure)
@@ -227,6 +228,25 @@ func dataDir(cfg store.Config) string {
 		return filepath.Dir(cfg.DSN)
 	}
 	return "data"
+}
+
+// listeningURL turns a net/http Addr into a link the terminal can open. A bare
+// ":8080" would produce the unusable "http://:8080" if prefixed directly, so an
+// omitted or wildcard host becomes localhost; that also keeps the link on the
+// machine the operator is actually sitting at when the server listens on all
+// interfaces. Explicit hosts (including IPv6 literals) are preserved.
+func listeningURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Not a host:port pair; keep the raw value so the log still shows
+		// what was configured rather than silently dropping it.
+		return "http://" + addr
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		host = "localhost"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 // redactDSN hides the password before a DSN reaches the log. A connection

@@ -29,6 +29,25 @@ func TestRedactDSNHidesPassword(t *testing.T) {
 	}
 }
 
+func TestListeningURLIsClickable(t *testing.T) {
+	cases := []struct {
+		addr, want string
+	}{
+		{":8080", "http://localhost:8080"},
+		{"127.0.0.1:8080", "http://127.0.0.1:8080"},
+		{"localhost:18091", "http://localhost:18091"},
+		{"0.0.0.0:8080", "http://localhost:8080"},
+		{"[::]:8080", "http://localhost:8080"},
+		{"[::1]:8080", "http://[::1]:8080"},
+		{"192.168.1.10:80", "http://192.168.1.10:80"},
+	}
+	for _, tc := range cases {
+		if got := listeningURL(tc.addr); got != tc.want {
+			t.Errorf("listeningURL(%q) = %q, want %q", tc.addr, got, tc.want)
+		}
+	}
+}
+
 func TestDatabaseConfigDefaultsToSQLite(t *testing.T) {
 	t.Setenv("FEEDWATCH_DB_DRIVER", "")
 	t.Setenv("FEEDWATCH_DB_DSN", "")
