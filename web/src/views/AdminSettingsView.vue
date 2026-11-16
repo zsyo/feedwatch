@@ -37,6 +37,12 @@ const err = ref('')
 const success = ref('')
 const busy = ref(false)
 
+interface GithubState { set: boolean; graphql: boolean }
+const github = ref<GithubState>({ set: false, graphql: false })
+const githubToken = ref('')
+const githubBusy = ref(false)
+const githubSuccess = ref('')
+
 const editableRows = computed(() => (data.value?.settings ?? []).filter((r) => r.editable))
 const readonlyRows = computed(() => (data.value?.settings ?? []).filter((r) => !r.editable))
 
@@ -64,11 +70,49 @@ async function load(): Promise<void> {
   err.value = ''
   try {
     apply(await api.get<SettingsResponse>('/api/admin/settings'))
+    github.value = await api.get<GithubState>('/api/admin/github-token')
+    githubToken.value = ''
   } catch (e) {
     err.value = errorMessage(e)
   }
 }
 onMounted(load)
+
+async function clearGithub(): Promise<void> {
+  if (!window.confirm('确定清除已保存的 GitHub token？清除后 GitHub 订阅改用匿名访问，限流会降到每小时 60 次。')) return
+  err.value = ''
+  githubSuccess.value = ''
+  githubBusy.value = true
+  try {
+    github.value = await api.put<GithubState>('/api/admin/github-token', {
+      clear: true, graphql: github.value.graphql,
+    })
+    githubToken.value = ''
+    githubSuccess.value = '已清除，重启进程后生效。'
+  } catch (e) {
+    err.value = errorMessage(e)
+  } finally {
+    githubBusy.value = false
+  }
+}
+
+async function saveGithub(): Promise<void> {
+  err.value = ''
+  githubSuccess.value = ''
+  githubBusy.value = true
+  try {
+    github.value = await api.put<GithubState>('/api/admin/github-token', {
+      token: githubToken.value.trim(),
+      graphql: github.value.graphql,
+    })
+    githubToken.value = ''
+    githubSuccess.value = '已保存，重启进程后生效。'
+  } catch (e) {
+    err.value = errorMessage(e)
+  } finally {
+    githubBusy.value = false
+  }
+}
 
 function changed(): Record<string, string> {
   const out: Record<string, string> = {}
@@ -112,6 +156,30 @@ function kindOf(key: string): string {
   <Notice kind="error" :message="err" />
   <Notice kind="success" :message="success" />
   <Notice kind="info" :message="data?.note" />
+
+  <div class="card">
+    <h2>GitHub 访问凭据</h2>
+    <p class="card-sub">
+      用于追踪没有 releases.atom 的仓库。留空表示不修改已保存的 token；密文加密存放，页面不会回显。匿名访问每小时 60 次，带 token 每小时 5000 次。
+    </p>
+    <div class="form-row">
+      <label>GitHub token
+        <input v-model="githubToken" type="password" autocomplete="off"
+          :placeholder="github.set ? '已保存，留空表示不修改' : '粘贴 Personal Access Token'" />
+      </label>
+      <label class="inline-check" style="align-self: end; padding-bottom: .5rem">
+        <input v-model="github.graphql" type="checkbox" /> 启用 GraphQL 批量查询
+      </label>
+    </div>
+    <p class="hint">
+      GraphQL 一次请求可查多个仓库，减少请求数，但需要 token；它没有条件请求，每轮都会重新拉取最新版本。不启用时每个仓库走 REST 逐仓库抓取。
+    </p>
+    <div class="form-actions">
+      <button class="primary" type="button" :disabled="githubBusy" @click="saveGithub">保存</button>
+      <button class="ghost" type="button" :disabled="githubBusy || !github.set" @click="clearGithub">清除 token</button>
+    </div>
+    <Notice kind="success" :message="githubSuccess" />
+  </div>
 
   <div class="card">
     <h2>可编辑参数</h2>

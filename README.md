@@ -1,6 +1,6 @@
 # FeedWatch
 
-一个 Go 常驻程序：按配置轮询 `releases.atom`，发现**新的稳定版本**后推送通知。通知渠道支持 Resend 邮件，以及企业微信、飞书、钉钉、Telegram、Slack、Discord、Teams、Bark、ntfy 和通用 Webhook，**可同时推送到多个渠道**。数据源、通知渠道、状态存储都是可插拔接口（当前数据源仍只有 Atom）。
+一个 Go 常驻程序：按配置轮询 `releases.atom`，发现**新的稳定版本**后推送通知。通知渠道支持 Resend 邮件，以及企业微信、飞书、钉钉、Telegram、Slack、Discord、Teams、Bark、ntfy 和通用 Webhook，**可同时推送到多个渠道**。数据源、通知渠道、状态存储都是可插拔接口（支持 Atom/RSS 与 GitHub Releases 两种数据源）。
 
 **两种镜像变体**：不带后缀的 base 镜像保持纯 `config.yaml` 手动配置（无前端资源、无 HTTP 服务、无 SQLite）；`-webui` 变体额外提供多用户 Web 管理界面、登录鉴权与数据库存储（SQLite / MySQL / PostgreSQL），**空库启动、不需要任何配置文件**，首个管理员密码在容器日志里打印一次。两者由同一个 `//go:build webui` 开关隔离，base 二进制不链接任何 WebUI / SQLite 代码，详见 [WebUI 变体](#webui-变体)。
 
@@ -29,7 +29,7 @@
 | 目录属主看着没问题却仍 not writable | 多半是 **rootless Docker**：容器 uid 映射到宿主的 `100000+`，与 `id -u` 无关；用命名卷或 `user: "0:0"`，见 [rootless Docker 下的 uid 映射](#rootless-docker-下的-uid-映射) |
 | 订阅很多 feed / 一轮很多通知 | 抓取受 `poll.concurrency` 有界并发 + `poll.request_spacing` 限速；渠道投递受 `notify.send_spacing` 限速（**按渠道类型**，同类型共用一个门），见[并发与频率控制](#并发与频率控制) |
 
-> 去重只认 Atom `<id>`，不是版本号。GitHub 的 feed 只保留最近约 10 条，长时间停机漏掉的中间版本不会补发——这是预期行为。
+> 去重只认条目的稳定 ID（Atom `<id>`，GitHub release 的数字 id），不是版本号。GitHub 的 feed 只保留最近约 10 条，长时间停机漏掉的中间版本不会补发——这是预期行为；需要更早的记录请用 `type: github`（REST API，可翻页）。
 
 ## 快速开始（本地 Windows exe，不需要 Docker）
 
@@ -87,7 +87,7 @@ $env:RESEND_API_KEY="re_xxx"
 - `config.example.yaml`：**唯一提交进仓库**的配置模板，带全部字段与注释。
 - `config.yaml`：从模板复制出的本地运行配置，含你的域名、收件人与 feed 列表，已被 `.gitignore` 忽略——随便改都不会产生 git diff。`.env`、`config.local.yaml` 同样不提交。
 - 密钥永远不写进 YAML，只从环境变量读。
-- 新增一个监控项目 = 复制一段 `feeds`、改 `name` / `url`，**零代码改动**。
+- 新增一个监控项目 = 复制一段 `feeds`、改 `name` / `url`，**零代码改动**（Atom 用完整 URL，GitHub Releases 用 `owner/repo`）。
 - 新增一个通知渠道 = 在 `notify.channels` 加一段、配好环境变量，**零代码改动**；可多个并存。完整字段见 `config.example.yaml` 与[通知渠道](#通知渠道)。
 
 ```yaml
@@ -103,9 +103,18 @@ feeds:
       # version_pattern: '^v?(\d+\.\d+\.\d+)$'
     options:
       content_policy: text   # none | text | html
+
+  # GitHub Releases：给没有 releases.atom 的仓库用；url 填 owner/repo
+  - name: acme/app
+    type: github
+    url: acme/app
+    enabled: true
+    options:
+      release_scope: stable    # stable | prerelease | all
+      # token: ${GITHUB_TOKEN} # 可选，匿名 60 次/小时，带 token 5000 次/小时
 ```
 
-`filter.stable_only: true` 时会从标题里提取 3~4 段数字版本号，因此能处理 GitHub 的人类可读标题（`[release-branch.go1.27] go1.27.3`、`Rust 1.99.1`、`v3.15.2`），并排除 `rc/beta/alpha/pre/dev/nightly/snapshot/aN/bN` 后缀以及 `Python 3.10 end of life` 这类非版本标签。邮件里显示的是提取出的版本词元（如 `go1.27.3`）。若某项目真实版本只有两段，用该 feed 的 `version_pattern` 覆盖即可。`stable_only: false` 会放行所有条目（预发布仍会在数据里被标注为 unstable）。
+`filter.stable_only: true` 时会从标题里提取 3~4 段数字版本号，因此能处理 GitHub 的人类可读标题（`[release-branch.go1.27] go1.27.3`、`Rust 1.99.1`、`v3.15.2`），并排除 `rc/beta/alpha/pre/dev/nightly/snapshot/aN/bN` 后缀以及 `Python 3.10 end of life` 这类非版本标签。邮件里显示的是提取出的版本词元（如 `go1.27.3`）。若某项目真实版本只有两段，用该 feed 的 `version_pattern` 覆盖即可。`stable_only: false` 会放行所有条目（预发布仍会在数据里被标注为 unstable）。`type: github` 不走标题启发式：版本范围由 `options.release_scope` 按 GitHub 的 `is_prerelease` / `is_draft` 标记决定（`stable` 仅正式版、`prerelease` 仅预发布、`all` 全部），草稿永远跳过；对应的 filter 只保留 `include` / `exclude` / `version_pattern`。
 
 基线邮件取的是**语义上最高的版本**，不是 `updated` 时间最新的一条——同一天发布多个维护分支时，时间戳会把旧分支的补丁版排到最前面。
 
@@ -652,6 +661,7 @@ internal/domain/              领域模型（零内部依赖）
 internal/config/              YAML + env 覆盖 + 校验
 internal/source/              Source 接口 / Registry
 internal/source/atom/         Atom/RSS 解析、条件请求、重试
+internal/source/github/       GitHub Releases REST 抓取 + 可选 GraphQL 批量预取
 internal/filter/              稳定版过滤规则
 internal/notifier/            Notifier 接口 / Registry / Multi 扇出与失败策略 / 投递限速装饰器
 internal/notifier/template/   go:embed 邮件与 IM 消息模板（基线 / 新版本共用）
@@ -683,7 +693,7 @@ base 二进制只链接两个外部模块：`go.yaml.in/yaml/v4`、`github.com/r
 
 ## 如何扩展
 
-**新增数据源**（例如 GitHub REST API）：新建 `internal/source/githubapi/`，实现 `source.Source`（`Type()` + `Fetch(ctx, Cursor) (Result, error)`），导出匹配 `source.Factory` 的 `New`；在 `main.go` 加一行 `srcReg.Register("github_api", githubapi.New)`；配置里加 `type: github_api` 的 feed。新参数走 `feeds[].options` 透传。`domain` / `config` / `filter` / `store` / `notifier` / `watcher` / 模板 / 两个 Dockerfile（base / webui）**全部不用改**（两种构建复用同一批叶子包）。
+**新增数据源**：新建 `internal/source/<name>/`，实现 `source.Source`（`Type()` + `Fetch(ctx, Cursor) (Result, error)`），导出匹配 `source.Factory` 的 `New`；在 `main.go` 与 `webui_hook_webui.go` 各加一行 `srcReg.Register(...)`；配置 / 页面里加对应的 `type`。新参数走 `feeds[].options` 透传。`domain` / `config` / `filter` / `store` / `notifier` / `watcher` / 模板 / 两个 Dockerfile **全部不用改**（两种构建复用同一批叶子包）。现成的 `internal/source/github/` 是一个完整样例：REST 主路径 + 可选 GraphQL 批量（通过 context 注入每轮缓存，失败逐仓库降级回 REST）。
 
 **新增通知渠道**（例如 Matrix）：在 `internal/notifier/webhook/` 新增一个文件实现 `webhook.Adapter`（`Type()` + `Build(Message, Options) (Request, error)` + `Check(status, body) error`），在 `webhook/adapters.go` 的 `Adapters()` 里加一行即可。HTTP 客户端、重试/退避、渲染、日志、密钥展开全在共享引擎里，`main.go` / `config` / `watcher` / 模板 / 两个 Dockerfile（base / webui）**全部不用改**（两种构建复用同一批叶子包）；配置里写 `type: matrix` + `options` 即可启用，也能与现有渠道并存。
 
@@ -725,7 +735,7 @@ actionlint .github/workflows/docker-publish.yml
 ## 已知限制
 
 - 单实例设计：多个实例共写同一状态文件会竞态；WebUI 变体同理（单个 orchestrator；SQLite 额外固定 `SetMaxOpenConns(1)`，MySQL / PostgreSQL 只是连接池可调，并发实例仍会重复投递）。
-- GitHub feed 未认证访问有限流；默认 30 分钟 × 3 个源约 6 次/小时，并启用 ETag/304、`poll.concurrency` / `request_spacing` 削峰与指数退避。
+- GitHub 未认证访问有限流（REST 60 次/小时、GraphQL 必须 token）；默认 30 分钟 × 3 个源约 6 次/小时，并启用 ETag/304、`poll.concurrency` / `request_spacing` 削峰与指数退避。带 token 时 REST 提升到 5000 次/小时；多个 GitHub 订阅可打开 `github.graphql` 用一次 GraphQL 请求批量查询（每轮全量、无 304，失败自动降级回 REST）。
 - `From` 必须是 Resend 已验证域名，否则发送会 403。
 - `best_effort` 策略下，某个渠道持续失败会丢弃该渠道的后续通知（只留 ERROR 日志），以保证其它渠道不被重复轰炸；要求不漏推送请改用 `strict`。
 - 各渠道都有自己的频率上限（企业微信 / 钉钉 20 条/分钟，飞书 100 条/分钟且 5 条/秒，Telegram 同一会话约 1 条/秒，Teams 4 次/秒；Resend 默认 10 次/秒/团队）。默认 30 分钟轮询 + 一轮一条 digest 远低于上限；`notify.send_spacing` 默认 250ms 只是每种渠道类型的通用保护，把 `mode` 改成 `per_feed`、同一类型加很多渠道或缩短间隔时仍需按该类型最严格的限制调整。

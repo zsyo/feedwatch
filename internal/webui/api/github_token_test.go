@@ -65,7 +65,7 @@ func TestGithubTokenIsSealedAndNeverEchoed(t *testing.T) {
 	}
 
 	// Clearing with an empty token removes the credential.
-	admin.do(http.MethodPut, "/api/admin/github-token", map[string]any{"token": ""}, http.StatusOK)
+	admin.do(http.MethodPut, "/api/admin/github-token", map[string]any{"clear": true}, http.StatusOK)
 	out = admin.do(http.MethodGet, "/api/admin/github-token", nil, http.StatusOK)
 	if out["set"] != false {
 		t.Errorf("token should be cleared: %+v", out)
