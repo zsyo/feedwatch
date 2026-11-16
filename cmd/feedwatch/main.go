@@ -26,6 +26,7 @@ import (
 	"feedwatch/internal/pace"
 	"feedwatch/internal/source"
 	atomsource "feedwatch/internal/source/atom"
+	githubsource "feedwatch/internal/source/github"
 	"feedwatch/internal/store"
 	jsonstore "feedwatch/internal/store/jsonfile"
 	"feedwatch/internal/watcher"
@@ -281,6 +282,7 @@ func run() error {
 	// ---- registries: adding a new implementation needs one Register() line ----
 	srcReg := source.NewRegistry()
 	srcReg.Register("atom", atomsource.New)
+	srcReg.Register(githubsource.SourceType, githubsource.New)
 
 	notifReg := notifier.NewRegistry()
 	notifReg.Register("email", emailnotify.New)
