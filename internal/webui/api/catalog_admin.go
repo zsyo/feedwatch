@@ -264,8 +264,8 @@ func (s *Server) adminUpdateEntry(w http.ResponseWriter, r *http.Request, _ Ctx)
 			add("enabled", boolToInt(value))
 		case "source_type":
 			var value string
-			if err := json.Unmarshal(raw, &value); err != nil || value != "atom" {
-				fail(w, http.StatusBadRequest, "invalid_source_type", "source_type must be atom")
+			if err := json.Unmarshal(raw, &value); err != nil || !validSourceType(value) {
+				fail(w, http.StatusBadRequest, "invalid_source_type", "source_type must be atom or github")
 				return
 			}
 			add("source_type", value)

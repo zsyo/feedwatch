@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	githubsource "feedwatch/internal/source/github"
 )
 
 // NormalizeURL produces the canonical form used as the poll-pool identity.
@@ -50,4 +52,18 @@ func URLKey(raw string) (string, string, error) {
 	}
 	sum := sha256.Sum256([]byte(normalized))
 	return normalized, hex.EncodeToString(sum[:]), nil
+}
+
+// RepoURLKey does the same for GitHub Releases subscriptions, which identify
+// a repository as "owner/repo" instead of an absolute URL. The stored url is
+// prefixed with "github:" so it can never collide with an atom URL in the
+// shared feed_pool, while the source receives the bare "owner/repo".
+func RepoURLKey(raw string) (string, string, error) {
+	repo, err := githubsource.NormalizeRepo(raw)
+	if err != nil {
+		return "", "", err
+	}
+	stored := "github:" + repo
+	sum := sha256.Sum256([]byte(stored))
+	return stored, hex.EncodeToString(sum[:]), nil
 }

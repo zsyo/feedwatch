@@ -9,9 +9,16 @@ import (
 	"net/http"
 	"strings"
 
+	githubsource "feedwatch/internal/source/github"
 	"feedwatch/internal/webui"
 	"feedwatch/internal/webui/store"
 )
+
+// validSourceType reports whether a subscription may use this source type.
+// atom is the historical default; github tracks repositories without a feed.
+func validSourceType(typ string) bool {
+	return typ == "atom" || githubsource.IsValidSourceType(typ)
+}
 
 type subscription struct {
 	ID           int64           `json:"id"`
@@ -123,9 +130,42 @@ type writeError struct {
 // point (manual form, catalog quick subscribe, future imports) must go through
 // here.
 func (s *Server) subscribeURL(userID int64, in subscribeInput) (string, *writeError) {
-	normalized, key, err := webui.URLKey(in.URL)
+	sourceType := in.SourceType
+	if strings.HasPrefix(strings.TrimSpace(in.URL), githubsource.StoredPrefix) {
+		// A catalog entry may carry a stored "github:owner/repo" URL while its
+		// source_type stayed at the DDL default. Trust the URL shape so a
+		// one-click subscribe never feeds a non-URL into the atom key rules.
+		sourceType = githubsource.SourceType
+	}
+	if sourceType == "" {
+		sourceType = "atom"
+	}
+	if !validSourceType(sourceType) {
+		return "", &writeError{http.StatusBadRequest, "invalid_source_type", "source_type must be atom or github"}
+	}
+
+	var normalized, key string
+	var err error
+	if githubsource.IsValidSourceType(sourceType) {
+		normalized, key, err = webui.RepoURLKey(in.URL)
+	} else {
+		normalized, key, err = webui.URLKey(in.URL)
+	}
 	if err != nil {
 		return "", &writeError{http.StatusBadRequest, "invalid_url", err.Error()}
+	}
+	// A GitHub subscription's release_scope lives in filter_json; reject bad
+	// values here so the orchestrator never has to guess at poll time.
+	if githubsource.IsValidSourceType(sourceType) && in.Filter != nil {
+		if raw, ok := in.Filter["release_scope"]; ok {
+			scope, ok := raw.(string)
+			if !ok {
+				return "", &writeError{http.StatusBadRequest, "invalid_release_scope", "release_scope must be a string"}
+			}
+			if _, err := githubsource.ParseScope(scope); err != nil {
+				return "", &writeError{http.StatusBadRequest, "invalid_release_scope", err.Error()}
+			}
+		}
 	}
 	policy := in.NotifyPolicy
 	if policy == "" {
@@ -133,10 +173,6 @@ func (s *Server) subscribeURL(userID int64, in subscribeInput) (string, *writeEr
 	}
 	if policy != "always" && policy != "on_update" {
 		return "", &writeError{http.StatusBadRequest, "invalid_policy", "notify_policy must be always or on_update"}
-	}
-	sourceType := in.SourceType
-	if sourceType == "" {
-		sourceType = "atom"
 	}
 	filterJSON := []byte("{}")
 	if in.Filter != nil {
@@ -187,6 +223,7 @@ func (s *Server) updateSubscription(w http.ResponseWriter, r *http.Request, c Ct
 	}
 	var req struct {
 		URL          *string         `json:"url"`
+		SourceType   *string         `json:"source_type"`
 		DisplayName  *string         `json:"display_name"`
 		Filter       *map[string]any `json:"filter"`
 		NotifyPolicy *string         `json:"notify_policy"`
@@ -196,6 +233,13 @@ func (s *Server) updateSubscription(w http.ResponseWriter, r *http.Request, c Ct
 		fail(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	// Switching a subscription's source type in place would leave orphaned
+	// seen_ids/user_seen rows and stale ETag validators under the old url_key.
+	// The UI offers "delete and re-add" instead; reject it at the API too.
+	if req.SourceType != nil {
+		fail(w, http.StatusBadRequest, "source_type_immutable", "source_type cannot be changed; delete and re-add the subscription")
+		return
+	}
 	sets := make([]string, 0, 6)
 	args := make([]any, 0, 8)
 	add := func(column string, value any) {
@@ -203,7 +247,21 @@ func (s *Server) updateSubscription(w http.ResponseWriter, r *http.Request, c Ct
 		args = append(args, value)
 	}
 	if req.URL != nil {
-		normalized, key, err := webui.URLKey(*req.URL)
+		// Decide the key namespace from the stored row's source type: an atom
+		// URL and a GitHub "owner/repo" must not share identity handling.
+		var storedType string
+		if err := s.db.QueryRow(`SELECT source_type FROM subscriptions
+			WHERE id=? AND user_id=? AND deleted_at IS NULL`, id, c.User.ID).Scan(&storedType); err != nil {
+			fail(w, http.StatusNotFound, "not_found", "subscription not found")
+			return
+		}
+		var normalized, key string
+		var err error
+		if githubsource.IsValidSourceType(storedType) {
+			normalized, key, err = webui.RepoURLKey(*req.URL)
+		} else {
+			normalized, key, err = webui.URLKey(*req.URL)
+		}
 		if err != nil {
 			fail(w, http.StatusBadRequest, "invalid_url", err.Error())
 			return

@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"unicode/utf8"
+
+	githubsource "feedwatch/internal/source/github"
 )
 
 // Bounds for user-supplied catalog content. They are also handed to the SPA in
@@ -40,6 +42,12 @@ var sensitiveQueryFragments = []string{
 func CatalogURLKey(raw string) (normalized, key string, err error) {
 	if len(raw) > MaxCatalogURLLen {
 		return "", "", fmt.Errorf("webui: catalog URL is longer than %d bytes", MaxCatalogURLLen)
+	}
+	// GitHub releases entries use "owner/repo" (or a GitHub repository URL)
+	// instead of an absolute feed URL. Delegate those to the github identity
+	// rules; everything else keeps the stricter catalog URL checks below.
+	if _, repoErr := githubsource.NormalizeRepo(raw); repoErr == nil {
+		return RepoURLKey(raw)
 	}
 	normalized, key, err = URLKey(raw)
 	if err != nil {

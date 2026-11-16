@@ -15,7 +15,11 @@ const SourceType = "github"
 
 var (
 	repoPattern = regexp.MustCompile(`^[a-z0-9_.-]+/[a-z0-9_.-]+$`)
-	githubHosts = []string{"https://github.com/", "http://github.com/", "github.com/"}
+	// StoredPrefix is how the WebUI keeps GitHub subscriptions in the shared
+	// feed_pool without colliding with an atom URL. NormalizeRepo accepts it so
+	// stored values round-trip through validation unchanged.
+	StoredPrefix = "github:"
+	githubHosts  = []string{"https://github.com/", "http://github.com/", "github.com/", StoredPrefix}
 )
 
 // NormalizeRepo accepts "owner/repo" and full GitHub URLs such as
@@ -27,14 +31,21 @@ func NormalizeRepo(raw string) (string, error) {
 	if s == "" {
 		return "", fmt.Errorf("github: repository is required (expected owner/repo)")
 	}
+	matchedPrefix := ""
 	for _, prefix := range githubHosts {
 		if strings.HasPrefix(strings.ToLower(s), prefix) {
+			matchedPrefix = prefix
 			s = s[len(prefix):]
 			break
 		}
 	}
-	s = strings.Trim(s, "/")
-	s = strings.TrimSuffix(s, ".git")
+	// Only strip slashes when a known prefix was present. Otherwise a relative
+	// URL like "/relative/feed.atom" would trim into a valid-looking "repo/name"
+	// and slip past the catalog's URL safety checks.
+	if matchedPrefix != "" {
+		s = strings.Trim(s, "/")
+		s = strings.TrimSuffix(s, ".git")
+	}
 	s = strings.ToLower(s)
 	if !repoPattern.MatchString(s) {
 		return "", fmt.Errorf("github: invalid repository %q (expected owner/repo)", strings.TrimSpace(raw))
