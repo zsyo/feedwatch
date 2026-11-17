@@ -126,13 +126,17 @@ var ChannelFields = map[string][]Field{
 		{Key: "content_type", Label: "Content-Type", Kind: FieldText, Scope: ScopeOption, Placeholder: "application/json; charset=utf-8"},
 		{Key: "body", Label: "请求体模板", Kind: FieldTextarea, Scope: ScopeOption, Help: "留空使用默认 JSON 模板；可用 {{json .Text}} 等占位符"},
 	},
-	"log": {},
 }
 
 // channelTypeOrder keeps the UI dropdown stable regardless of map iteration.
+// "log" is deliberately absent: a WebUI log channel writes notifications to
+// the server log that the account owner cannot see, so choosing it looks like
+// a silent delivery failure. Remove it from ChannelFields too so the API
+// rejects any attempt to create one. The base (config.yaml) build is a separate
+// code path and still supports type: log.
 var channelTypeOrder = []string{
 	"email", "telegram", "wecom", "feishu", "dingtalk",
-	"slack", "discord", "teams", "bark", "ntfy", "webhook", "log",
+	"slack", "discord", "teams", "bark", "ntfy", "webhook",
 }
 
 // ChannelError carries a stable machine code so the API can answer 400 with a
