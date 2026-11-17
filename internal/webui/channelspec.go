@@ -351,7 +351,7 @@ func SecretHint(_ string, value string) string {
 
 func splitList(v string) []string {
 	out := make([]string, 0, 4)
-	for _, part := range strings.Split(v, ",") {
+	for part := range strings.SplitSeq(v, ",") {
 		if item := strings.TrimSpace(part); item != "" {
 			out = append(out, item)
 		}

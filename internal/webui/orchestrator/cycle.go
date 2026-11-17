@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -205,7 +206,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context) error {
 	for userID := range acc {
 		users = append(users, userID)
 	}
-	sort.Slice(users, func(i, j int) bool { return users[i] < users[j] })
+	slices.Sort(users)
 	for _, userID := range users {
 		a := acc[userID]
 		chIDs := channelIDs[userID]

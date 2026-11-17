@@ -114,7 +114,7 @@ type DB struct {
 }
 
 func wrapDB(raw *sql.DB, d Dialect) *DB {
-	return &DB{gateway: gateway{q: raw, d: d}, raw: raw}
+	return &DB{q: raw, d: d, raw: raw}
 }
 
 func (db *DB) Close() error { return db.raw.Close() }
@@ -146,7 +146,7 @@ type Tx struct {
 }
 
 func wrapTx(raw *sql.Tx, d Dialect) *Tx {
-	return &Tx{gateway: gateway{q: raw, d: d}, raw: raw}
+	return &Tx{q: raw, d: d, raw: raw}
 }
 
 func (tx *Tx) Commit() error   { return tx.raw.Commit() }

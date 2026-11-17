@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -337,9 +338,7 @@ func (s *Server) mergeSecrets(existing channelView, typ string, input channelInp
 				// user is allowed to overwrite the credentials from here.
 				s.log.Warn("webui: replacing unreadable channel secrets", "channel", existing.ID, "error", err)
 			} else {
-				for k, v := range values {
-					merged[k] = v
-				}
+				maps.Copy(merged, values)
 			}
 		}
 	}
@@ -394,8 +393,7 @@ func (s *Server) deleteChannel(w http.ResponseWriter, r *http.Request, c Ctx) {
 
 // writeChannelError turns a validation error into a 400 with its stable code.
 func writeChannelError(w http.ResponseWriter, err error) {
-	var ce *webui.ChannelError
-	if errors.As(err, &ce) {
+	if ce, ok := errors.AsType[*webui.ChannelError](err); ok {
 		fail(w, http.StatusBadRequest, ce.Code, ce.Message)
 		return
 	}

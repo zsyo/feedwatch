@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -90,9 +91,7 @@ func (b *GraphQLBatchFetcher) Prefetch(ctx context.Context, repos []string) map[
 			}
 			continue
 		}
-		for repo, res := range results {
-			out[repo] = res
-		}
+		maps.Copy(out, results)
 		// Any alias absent from the response also falls back to REST.
 		for _, repo := range batch {
 			if _, ok := out[repo]; !ok {

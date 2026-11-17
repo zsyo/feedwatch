@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strconv"
 	"strings"
 	"sync"
@@ -249,9 +250,7 @@ func (w *DeliveryWorker) specFor(channelID int64) (notifier.NotifierSpec, error)
 		return notifier.NotifierSpec{}, fmt.Errorf("orchestrator: decode channel %d: %w", channelID, err)
 	}
 	opts := make(map[string]string, len(cs.Options)+4)
-	for k, v := range cs.Options {
-		opts[k] = v
-	}
+	maps.Copy(opts, cs.Options)
 	var apiKey string
 	if strings.TrimSpace(sealed) != "" {
 		values, err := w.sealer.OpenMap(sealed, secrets.ChannelAAD(channelID))

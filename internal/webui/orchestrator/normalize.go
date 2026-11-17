@@ -107,7 +107,7 @@ func numericParts(v string) ([]int, bool) {
 
 func compareParts(a, b []int) int {
 	n := max(len(a), len(b))
-	for i := 0; i < n; i++ {
+	for i := range n {
 		x, y := 0, 0
 		if i < len(a) {
 			x = a[i]

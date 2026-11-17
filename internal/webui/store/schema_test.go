@@ -71,7 +71,7 @@ func tableColumns(t *testing.T, dialect Dialect) map[string]map[string]bool {
 		if end := strings.LastIndexByte(body, ')'); end >= 0 {
 			body = body[:end]
 		}
-		for _, line := range strings.Split(body, "\n") {
+		for line := range strings.SplitSeq(body, "\n") {
 			line = strings.TrimSpace(line)
 			// Strip trailing comma and any inline comment.
 			line = strings.TrimSuffix(line, ",")

@@ -212,7 +212,7 @@ func TestCatalogSubmissionDeduplicationAndLimits(t *testing.T) {
 	}
 
 	// One account may not flood the review queue. alice already has one.
-	for i := 0; i < webui.MaxPendingPerUser-1; i++ {
+	for i := range webui.MaxPendingPerUser - 1 {
 		catalogSubmit(alice, "new", nil, "批量", "https://example.com/bulk"+itoa(int64(i))+".atom", cat, http.StatusCreated)
 	}
 	out = catalogSubmit(alice, "new", nil, "超额", "https://example.com/overflow.atom", cat, http.StatusTooManyRequests)

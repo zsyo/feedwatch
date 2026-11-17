@@ -453,7 +453,7 @@ func (s *Server) identityOwner(provider, subject string) (int64, error) {
 func (s *Server) createIdentityUser(provider string, profile oauth.Profile) (int64, error) {
 	base := deriveUsername(provider, profile.Login)
 	now := store.Now()
-	for attempt := 0; attempt < 10; attempt++ {
+	for attempt := range 10 {
 		username := base
 		if attempt > 0 {
 			username = fmt.Sprintf("%s-%d", base, attempt+1)

@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -96,9 +97,7 @@ var defaults = map[string]Provider{
 // runtime.
 func Defaults() map[string]Provider {
 	out := make(map[string]Provider, len(defaults))
-	for k, v := range defaults {
-		out[k] = v
-	}
+	maps.Copy(out, defaults)
 	return out
 }
 

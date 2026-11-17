@@ -122,7 +122,7 @@ func insertColumns(body string) (string, []string, error) {
 	table := strings.TrimSpace(body[:open])
 	raw := body[open+1 : open+closeAt]
 	cols := make([]string, 0, 8)
-	for _, field := range strings.Split(raw, ",") {
+	for field := range strings.SplitSeq(raw, ",") {
 		name := strings.Trim(strings.TrimSpace(field), "\"`")
 		if name != "" {
 			cols = append(cols, name)
@@ -238,13 +238,11 @@ func (d Dialect) IsUniqueViolation(err error) bool {
 	}
 	switch d {
 	case MySQL:
-		var me *mysql.MySQLError
-		if errors.As(err, &me) {
+		if me, ok := errors.AsType[*mysql.MySQLError](err); ok {
 			return me.Number == 1062
 		}
 	case Postgres:
-		var pe *pgconn.PgError
-		if errors.As(err, &pe) {
+		if pe, ok := errors.AsType[*pgconn.PgError](err); ok {
 			return pe.Code == "23505"
 		}
 	}

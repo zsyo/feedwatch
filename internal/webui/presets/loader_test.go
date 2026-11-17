@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -81,9 +82,7 @@ func newPresetHTTPServer(t *testing.T, files map[string]string) *presetHTTPServe
 	// Copy so callers may build a second server from a modified map without a
 	// concurrent map read/write.
 	local := make(map[string]string, len(files))
-	for k, v := range files {
-		local[k] = v
-	}
+	maps.Copy(local, files)
 	p := &presetHTTPServer{}
 	p.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p.mu.Lock()

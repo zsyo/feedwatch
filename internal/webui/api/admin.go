@@ -4,6 +4,7 @@ package api
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -184,9 +185,7 @@ func settingDocs() map[string]settingDoc {
 			Detail:  rule.detail,
 		}
 	}
-	for k, doc := range readonlyDocs {
-		out[k] = doc
-	}
+	maps.Copy(out, readonlyDocs)
 	return out
 }
 
