@@ -133,13 +133,20 @@ func runWebUI(cfgPath, logLevel, logFormat string, once, dryRun bool) error {
 		log.Info("webui: GitHub token configured", "requests_per_hour", 5000)
 	}
 
+	subjectPrefix := settings["notify.subject_prefix"]
 	orch := orchestrator.New(st, fetcher, orchestrator.Options{
 		Interval:         dur("poll.interval", 30*time.Minute),
 		Timeout:          dur("poll.timeout", 2*time.Minute),
 		FetchConcurrency: intVal("poll.concurrency", 4),
 		FetchSpacing:     dur("poll.request_spacing", 100*time.Millisecond),
-		SubjectPrefix:    settings["notify.subject_prefix"],
+		SubjectPrefix:    subjectPrefix,
 	}, log)
+	// Shared release cache: the poll cycle fills it after every fetch and the
+	// baseline service reads it on subscribe, so N subscribers to one URL cost
+	// at most one network request. Both share the poll gate for rate limiting.
+	feedCache := orchestrator.NewFeedCache()
+	orch.SetFeedCache(feedCache)
+	baseline := orchestrator.NewBaseline(st, fetcher, feedCache, orch.FetchGate(), subjectPrefix, log)
 	if boolVal("github.graphql", false) {
 		batch := githubsource.NewGraphQLBatchFetcher(githubToken, nil, log)
 		if batch == nil {
@@ -168,7 +175,8 @@ func runWebUI(cfgPath, logLevel, logFormat string, once, dryRun bool) error {
 	if ua := settings["http.user_agent"]; ua != "" {
 		presetLoader.UserAgent = ua
 	}
-	srv := api.New(st, am, assets, log, version, sealer, api.WithPresetLoader(presetLoader))
+	srv := api.New(st, am, assets, log, version, sealer,
+		api.WithPresetLoader(presetLoader), api.WithBaseline(baseline))
 
 	if dryRun {
 		log.Info("webui: -dry-run is ignored; the WebUI variant has no dry-run poll mode")

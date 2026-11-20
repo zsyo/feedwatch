@@ -131,10 +131,21 @@ type Orchestrator struct {
 	// batch is the optional GitHub GraphQL prefetcher. nil means every
 	// subscription uses REST (the default when no token is configured).
 	batch githubsource.BatchFetcher
+	// cache holds the most recent releases per url_key so subscription-driven
+	// baseline snapshots can reuse poll results instead of re-fetching.
+	cache *FeedCache
 }
 
 // SetBatchFetcher enables the per-cycle GraphQL prefetch channel.
 func (o *Orchestrator) SetBatchFetcher(b githubsource.BatchFetcher) { o.batch = b }
+
+// SetFeedCache attaches the shared release cache. The composition root owns
+// the instance and passes the same one to the baseline service.
+func (o *Orchestrator) SetFeedCache(c *FeedCache) { o.cache = c }
+
+// FetchGate exposes the poll cycle's rate limiter so the baseline service can
+// share it; subscription-triggered fetches then obey poll.concurrency/spacing.
+func (o *Orchestrator) FetchGate() *pace.Gate { return o.gate }
 
 func New(st *store.Store, f Fetcher, opt Options, log *slog.Logger) *Orchestrator {
 	if log == nil {

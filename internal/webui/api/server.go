@@ -5,6 +5,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,18 @@ type Server struct {
 	// httpClient carries every outbound OAuth call, so one timeout covers the
 	// token exchange and the profile fetch.
 	httpClient *http.Client
+	// baseline pushes an immediate "current version" snapshot when a user
+	// (re)subscribes. Optional: nil in tests that do not exercise notifications.
+	baseline BaselineSource
+}
+
+// BaselineSource is implemented by orchestrator.Baseline. Parameters are plain
+// scalars so this package owns the interface it consumes without importing
+// orchestrator (which would invert the dependency). PushBaseline is expected
+// to be non-blocking from the caller's perspective and to never fail the
+// subscription that triggered it.
+type BaselineSource interface {
+	PushBaseline(ctx context.Context, userID int64, url, urlKey, sourceType, filterJSON, displayName string) error
 }
 
 // Option customises the Server at construction time. Variadic so every
@@ -58,6 +71,12 @@ func WithPresetLoader(l *presets.Loader) Option {
 // the token and profile calls to an httptest server.
 func WithOAuthProviders(providers map[string]oauth.Provider) Option {
 	return func(s *Server) { s.oauthProviders = providers }
+}
+
+// WithBaseline attaches the immediate-snapshot service. Production injects
+// orchestrator.Baseline; tests use a fake or leave it unset (no-op).
+func WithBaseline(b BaselineSource) Option {
+	return func(s *Server) { s.baseline = b }
 }
 
 func New(st *store.Store, am *auth.Manager, assets fs.FS, log *slog.Logger, version string, sealer *secrets.Sealer, opts ...Option) *Server {

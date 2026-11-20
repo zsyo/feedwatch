@@ -162,6 +162,8 @@ func TestRunOnceFetchesEachURLOnceAndCommitsGlobalSeen(t *testing.T) {
 		feedA: {Releases: []domain.Release{release("id-1", "1.2.3"), release("id-2", "1.2.4")}},
 	}}
 	o, db := newHarness(t, f)
+	cache := NewFeedCache()
+	o.SetFeedCache(cache)
 	u1, u2 := addUser(t, db, "alice"), addUser(t, db, "bob")
 	addChannel(t, db, u1)
 	addChannel(t, db, u2)
@@ -200,6 +202,10 @@ func TestRunOnceFetchesEachURLOnceAndCommitsGlobalSeen(t *testing.T) {
 	}
 	if got := countRows(t, db, `SELECT COUNT(*) FROM user_seen`); got != 4 {
 		t.Fatalf("user_seen = %d, want 4 (2 releases x 2 users)", got)
+	}
+	// The poll result must seed the shared cache so later subscribers reuse it.
+	if cached, ok := cache.Get(key); !ok || len(cached) != 2 {
+		t.Fatalf("poll did not fill release cache: %v, %v", cached, ok)
 	}
 }
 

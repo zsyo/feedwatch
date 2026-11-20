@@ -121,6 +121,12 @@ func (o *Orchestrator) RunOnce(ctx context.Context) error {
 				"url", entry.URL, "error", fetchErr)
 			continue
 		}
+		// Keep the shared cache in step with global seen state. A 304 carries
+		// no releases and must not overwrite the previous snapshot; Put also
+		// ignores empty slices, so this is safe either way.
+		if !res.NotModified {
+			o.cache.Put(key, res.Releases)
+		}
 		results[key] = res
 	}
 

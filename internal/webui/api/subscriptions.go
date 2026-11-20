@@ -3,16 +3,23 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	githubsource "feedwatch/internal/source/github"
 	"feedwatch/internal/webui"
 	"feedwatch/internal/webui/store"
 )
+
+// baselineTimeout bounds the detached baseline fetch so a slow feed can never
+// hold a request goroutine hostage. The subscription itself is already durable
+// by the time this fires.
+const baselineTimeout = 15 * time.Second
 
 // validSourceType reports whether a subscription may use this source type.
 // atom is the historical default; github tracks repositories without a feed.
@@ -223,7 +230,26 @@ func (s *Server) subscribeURL(userID int64, in subscribeInput) (string, *writeEr
 	if err := tx.Commit(); err != nil {
 		return "", &writeError{http.StatusInternalServerError, "db_error", err.Error()}
 	}
+	// Push the current-version snapshot after the subscription is durable.
+	// Fire-and-forget: a slow or broken feed must never fail the subscribe.
+	s.triggerBaseline(userID, normalized, key, sourceType, string(filterJSON), in.DisplayName)
 	return key, nil
+}
+
+// triggerBaseline schedules an immediate baseline snapshot on a detached
+// context. It is a no-op when no BaselineSource is configured (tests, or a
+// build that opts out). Errors are logged, never surfaced to the subscriber.
+func (s *Server) triggerBaseline(userID int64, url, urlKey, sourceType, filterJSON, displayName string) {
+	if s.baseline == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), baselineTimeout)
+		defer cancel()
+		if err := s.baseline.PushBaseline(ctx, userID, url, urlKey, sourceType, filterJSON, displayName); err != nil {
+			s.log.Warn("webui: baseline snapshot failed", "user", userID, "url_key", urlKey, "error", err)
+		}
+	}()
 }
 
 func (s *Server) updateSubscription(w http.ResponseWriter, r *http.Request, c Ctx) {
@@ -298,6 +324,21 @@ func (s *Server) updateSubscription(w http.ResponseWriter, r *http.Request, c Ct
 		}
 		add("notify_policy", *req.NotifyPolicy)
 	}
+	// A 0->1 flip deserves a fresh baseline snapshot: the user is re-subscribing
+	// to notifications after a pause and should see the current version again.
+	// Read the old state before the UPDATE; the final row fields are reloaded
+	// after commit so any URL/filter/display edits in this same PATCH are used.
+	reEnable := false
+	if req.Enabled != nil && *req.Enabled {
+		var wasEnabled int
+		err := s.db.QueryRow(`SELECT enabled FROM subscriptions
+			WHERE id=? AND user_id=? AND deleted_at IS NULL`, id, c.User.ID).Scan(&wasEnabled)
+		if err != nil {
+			fail(w, http.StatusNotFound, "not_found", "subscription not found")
+			return
+		}
+		reEnable = wasEnabled == 0
+	}
 	if req.Enabled != nil {
 		add("enabled", boolToInt(*req.Enabled))
 	}
@@ -313,6 +354,17 @@ func (s *Server) updateSubscription(w http.ResponseWriter, r *http.Request, c Ct
 		return
 	}
 	requireAffected(w, res, "subscription")
+	if reEnable {
+		var url, urlKey, sourceType, filterJSON, displayName string
+		err := s.db.QueryRow(`SELECT url, url_key, source_type, filter_json, display_name
+			FROM subscriptions WHERE id=? AND user_id=?`, id, c.User.ID).
+			Scan(&url, &urlKey, &sourceType, &filterJSON, &displayName)
+		if err != nil {
+			s.log.Warn("webui: reload re-enabled subscription for baseline failed", "id", id, "error", err)
+			return
+		}
+		s.triggerBaseline(c.User.ID, url, urlKey, sourceType, filterJSON, displayName)
+	}
 }
 
 func (s *Server) deleteSubscription(w http.ResponseWriter, r *http.Request, c Ctx) {
