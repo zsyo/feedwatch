@@ -468,14 +468,12 @@ function summary(ch: Channel): string[] {
     <p class="card-sub">密钥只显示「已配置」以及主机名提示，明文永不回显。</p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>类型 / 名称</th><th>配置</th><th>凭据</th><th>状态</th><th>操作</th></tr></thead>
+        <thead><tr><th>ID</th><th>类型</th><th>名称</th><th>配置</th><th>凭据</th><th>状态</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="ch in items" :key="ch.id">
             <td class="mono">{{ ch.id }}</td>
-            <td>
-              <span class="badge">{{ ch.type }}</span>
-              <div class="muted" style="margin-top: .3rem">{{ ch.name || '—' }}</div>
-            </td>
+            <td><span class="badge">{{ ch.type }}</span></td>
+            <td>{{ ch.name || '—' }}</td>
             <td class="mono cell-config">
               <div v-for="line in summary(ch)" :key="line">{{ line }}</div>
               <div v-if="!summary(ch).length" class="muted">—</div>
@@ -503,7 +501,7 @@ function summary(ch: Channel): string[] {
               </div>
             </td>
           </tr>
-          <tr v-if="!items.length"><td colspan="6" class="empty">还没有通知方式。先添加一个，之后的更新会推送到这里。</td></tr>
+          <tr v-if="!items.length"><td colspan="7" class="empty">还没有通知方式。先添加一个，之后的更新会推送到这里。</td></tr>
         </tbody>
       </table>
     </div>
