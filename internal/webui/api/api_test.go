@@ -67,6 +67,29 @@ func mustUser(t *testing.T, db *store.DB, name, password, role string, mustChang
 	return id
 }
 
+func userIDByName(t *testing.T, db *store.DB, name string) int64 {
+	t.Helper()
+	var id int64
+	if err := db.QueryRow(`SELECT id FROM users WHERE username=?`, name).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// seedEnabledChannel inserts an enabled channel directly, bypassing the API.
+// Subscription tests need one because subscribeURL requires at least one
+// enabled channel before it will create a subscription.
+func seedEnabledChannel(t *testing.T, db *store.DB, userID int64) int64 {
+	t.Helper()
+	res, err := db.Exec(`INSERT INTO channels (user_id, type, name, config_json, enabled)
+		VALUES (?, 'log', 'test', '{}', 1)`, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
+
 type testClient struct {
 	t      *testing.T
 	base   string
@@ -145,10 +168,11 @@ func TestMetaIsPublic(t *testing.T) {
 }
 
 func TestLoginCookieCSRFAndSubscriptionCRUD(t *testing.T) {
-	ts, _ := newTestServer(t)
+	ts, db := newTestServer(t)
 	anon := &testClient{t: t, base: ts.URL, http: &http.Client{}}
 	anon.do(http.MethodGet, "/api/auth/me", nil, http.StatusUnauthorized)
 
+	seedEnabledChannel(t, db, userIDByName(t, db, "alice"))
 	c := login(t, ts, "alice", "alice-pass")
 	if c.cookie == nil || !c.cookie.HttpOnly || c.cookie.SameSite != http.SameSiteStrictMode || c.cookie.Path != "/" {
 		t.Fatalf("unexpected session cookie: %+v", c.cookie)
@@ -198,6 +222,7 @@ func TestMustChangePasswordBlocksOtherEndpoints(t *testing.T) {
 func TestRoleGuardAndUserIsolation(t *testing.T) {
 	ts, db := newTestServer(t)
 	mustUser(t, db, "bob", "bob-pass", "user", 0)
+	seedEnabledChannel(t, db, userIDByName(t, db, "alice"))
 
 	alice := login(t, ts, "alice", "alice-pass")
 	alice.do(http.MethodGet, "/api/admin/users", nil, http.StatusForbidden)
@@ -311,12 +336,10 @@ func TestChannelSecretsAreSealedAndNeverEchoed(t *testing.T) {
 		"clear_secrets": []string{"token"},
 	}, http.StatusBadRequest) // token is required, so clearing alone is invalid
 
-	// Toggling enabled is a standalone operation.
-	c.do(http.MethodPatch, "/api/channels/"+itoa(id), map[string]any{"enabled": false}, http.StatusOK)
-	first = channels()[0].(map[string]any)
-	if first["enabled"] != false {
-		t.Fatalf("enabled was not toggled: %+v", first)
-	}
+	// The last enabled channel cannot be disabled; the guard comes from the
+	// "at least one enabled channel" invariant.
+	c.do(http.MethodPatch, "/api/channels/"+itoa(id), map[string]any{"enabled": false},
+		http.StatusBadRequest)
 
 	// Email keeps its API key in the sealed map, exposed only as a field name.
 	mail := c.do(http.MethodPost, "/api/channels", map[string]any{
@@ -330,6 +353,13 @@ func TestChannelSecretsAreSealedAndNeverEchoed(t *testing.T) {
 	list := channels()
 	if len(list) != 2 {
 		t.Fatalf("channels = %d, want 2", len(list))
+	}
+
+	// With a second enabled channel present, toggling one off is allowed.
+	c.do(http.MethodPatch, "/api/channels/"+itoa(id), map[string]any{"enabled": false}, http.StatusOK)
+	first = channels()[0].(map[string]any)
+	if first["enabled"] != false {
+		t.Fatalf("enabled was not toggled: %+v", first)
 	}
 }
 

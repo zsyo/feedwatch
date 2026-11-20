@@ -181,6 +181,17 @@ func (s *Server) subscribeURL(userID int64, in subscribeInput) (string, *writeEr
 			return "", &writeError{http.StatusBadRequest, "invalid_filter", err.Error()}
 		}
 	}
+	// A subscription with no channel to deliver to would silently swallow its
+	// first snapshot: the orchestrator commits user_seen but skips rendering
+	// when the user has no enabled channel. Require one up front.
+	hasChannel, err := s.hasEnabledChannel(userID)
+	if err != nil {
+		return "", &writeError{http.StatusInternalServerError, "db_error", err.Error()}
+	}
+	if !hasChannel {
+		return "", &writeError{http.StatusConflict, "no_enabled_channel",
+			"请先在「通知方式」里添加并启用至少一个通知渠道，再添加订阅"}
+	}
 	now := store.Now()
 
 	tx, err := s.db.Begin()

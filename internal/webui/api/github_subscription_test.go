@@ -12,6 +12,7 @@ import (
 
 func TestGithubSubscriptionUsesRepoURLKey(t *testing.T) {
 	ts, db := newTestServer(t)
+	seedEnabledChannel(t, db, userIDByName(t, db, "alice"))
 	c := login(t, ts, "alice", "alice-pass")
 
 	out := c.do(http.MethodPost, "/api/subscriptions", map[string]any{
@@ -67,7 +68,8 @@ func TestGithubSubscriptionRejectsBadScopeAndType(t *testing.T) {
 }
 
 func TestSubscriptionSourceTypeIsImmutable(t *testing.T) {
-	ts, _ := newTestServer(t)
+	ts, db := newTestServer(t)
+	seedEnabledChannel(t, db, userIDByName(t, db, "alice"))
 	c := login(t, ts, "alice", "alice-pass")
 	out := c.do(http.MethodPost, "/api/subscriptions", map[string]any{
 		"url": "https://example.com/a.atom", "source_type": "atom",

@@ -19,6 +19,7 @@ const entries = ref<CatalogEntry[]>([])
 const categories = ref<CatalogCategory[]>([])
 const mine = ref<CatalogSubmission[]>([])
 const meta = ref<CatalogMeta | null>(null)
+const hasEnabledChannel = ref(false)
 const err = ref('')
 const success = ref('')
 const busy = ref(false)
@@ -61,14 +62,16 @@ const filtered = computed(() => {
 async function load(): Promise<void> {
   err.value = ''
   try {
-    const [catalog, submissions] = await Promise.all([
+    const [catalog, submissions, ch] = await Promise.all([
       api.get<CatalogResponse>('/api/catalog'),
       api.get<{ submissions: CatalogSubmission[] }>('/api/catalog/submissions/mine'),
+      api.get<{ channels: { enabled: boolean }[] }>('/api/channels'),
     ])
     entries.value = catalog.entries
     categories.value = catalog.categories
     meta.value = catalog.meta
     mine.value = submissions.submissions
+    hasEnabledChannel.value = ch.channels.some((c) => c.enabled)
   } catch (e) {
     err.value = errorMessage(e)
   }
@@ -193,6 +196,7 @@ async function copyProposal(row: CatalogSubmission): Promise<void> {
   </PageHeader>
   <Notice kind="error" :message="err" />
   <Notice kind="success" :message="success" />
+  <Notice v-if="!hasEnabledChannel" kind="info" message="还没有启用的通知渠道，订阅的首轮基线通知会丢失。请先到「通知方式」添加并启用至少一个渠道，再一键订阅。" />
 
   <div class="catalog-toolbar">
     <label class="toolbar-field">关键字
@@ -232,7 +236,7 @@ async function copyProposal(row: CatalogSubmission): Promise<void> {
         <span v-else class="muted">暂无项目主页</span>
       </div>
       <div class="catalog-actions">
-        <button v-if="!row.subscribed" class="primary" type="button" @click="subscribe(row)">一键订阅</button>
+        <button v-if="!row.subscribed" class="primary" type="button" :disabled="!hasEnabledChannel" :title="!hasEnabledChannel ? '请先启用至少一个通知渠道' : ''" @click="subscribe(row)">一键订阅</button>
         <template v-else>
           <span class="badge badge-on">已订阅</span>
           <button class="danger" type="button" @click="cancel(row)">取消订阅</button>

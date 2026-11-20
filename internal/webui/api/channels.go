@@ -94,6 +94,39 @@ func (s *Server) channelsFor(userID int64) ([]channelView, error) {
 	return out, nil
 }
 
+// hasEnabledChannel reports whether the user has at least one enabled channel.
+// Only the enabled flag matters here: secret_state is derived at runtime from
+// the master key, so it is deliberately not part of this gate.
+func (s *Server) hasEnabledChannel(userID int64) (bool, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM channels WHERE user_id=? AND enabled=1`, userID).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+const (
+	lastEnabledChannelCode    = "last_enabled_channel"
+	lastEnabledChannelMessage = "请至少保留一个启用的通知渠道，否则已有订阅将收不到通知"
+)
+
+// guardEnabledChannelRemoval blocks an operation that would leave the user
+// with no enabled channel. excludeID is the channel being disabled/deleted.
+// It writes the error and returns false when the operation must be rejected.
+func (s *Server) guardEnabledChannelRemoval(w http.ResponseWriter, userID, excludeID int64) bool {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM channels
+		WHERE user_id=? AND enabled=1 AND id<>?`, userID, excludeID).Scan(&n); err != nil {
+		fail(w, http.StatusInternalServerError, "db_error", err.Error())
+		return false
+	}
+	if n == 0 {
+		fail(w, http.StatusBadRequest, lastEnabledChannelCode, lastEnabledChannelMessage)
+		return false
+	}
+	return true
+}
+
 // decorateSecrets only reports which secret fields exist and a scheme://host
 // hint for URLs. Decrypted values are dropped immediately.
 func (s *Server) decorateSecrets(item *channelView, sealed string) {
@@ -245,6 +278,9 @@ func (s *Server) updateChannel(w http.ResponseWriter, r *http.Request, c Ctx) {
 	// A toggle from the list only carries enabled; leave everything else alone.
 	if input.Type == "" && input.Name == "" && input.Fields == nil && input.Secrets == nil &&
 		input.ClearSecrets == nil && input.Enabled != nil {
+		if !*input.Enabled && existing.Enabled && !s.guardEnabledChannelRemoval(w, c.User.ID, id) {
+			return
+		}
 		res, err := s.db.Exec(`UPDATE channels SET enabled=? WHERE id=? AND user_id=?`,
 			boolInt(*input.Enabled), id, c.User.ID)
 		if err != nil {
@@ -286,6 +322,11 @@ func (s *Server) updateChannel(w http.ResponseWriter, r *http.Request, c Ctx) {
 	enabled := existing.Enabled
 	if input.Enabled != nil {
 		enabled = *input.Enabled
+	}
+	// Guard before Begin(): SQLite uses a single connection and a pool query
+	// issued while a transaction holds it would deadlock.
+	if !enabled && existing.Enabled && !s.guardEnabledChannelRemoval(w, c.User.ID, id) {
+		return
 	}
 
 	tx, err := s.db.Begin()
@@ -381,6 +422,9 @@ func (s *Server) deleteChannel(w http.ResponseWriter, r *http.Request, c Ctx) {
 	id, err := parseID(r, "id")
 	if err != nil {
 		fail(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if !s.guardEnabledChannelRemoval(w, c.User.ID, id) {
 		return
 	}
 	res, err := s.db.Exec(`DELETE FROM channels WHERE id=? AND user_id=?`, id, c.User.ID)

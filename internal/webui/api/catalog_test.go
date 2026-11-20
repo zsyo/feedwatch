@@ -122,6 +122,7 @@ func TestCatalogRoleGuard(t *testing.T) {
 // release as if it were new.
 func TestQuickSubscribeCopiesBaseline(t *testing.T) {
 	ts, db := newTestServer(t)
+	seedEnabledChannel(t, db, userIDByName(t, db, "alice"))
 	cat := insertCatalogCategory(t, db, "工具")
 	entryID, key := insertCatalogEntry(t, db, "示例项目", "https://example.com/feed.atom", cat)
 	mustExec(t, db, `INSERT INTO seen_ids (url_key, release_id, seen_at) VALUES (?,?,?)`, key, "r1", store.Now())

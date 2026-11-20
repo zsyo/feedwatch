@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 import { api, errorMessage } from '../api'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
@@ -22,6 +23,7 @@ const scopeLabels: Record<Scope, string> = {
 }
 
 const items = ref<Subscription[]>([])
+const hasEnabledChannel = ref(false)
 const err = ref('')
 const success = ref('')
 const busy = ref(false)
@@ -42,8 +44,12 @@ function currentScope(row: Subscription): Scope {
 async function load(): Promise<void> {
   err.value = ''
   try {
-    const out = await api.get<{ subscriptions: Subscription[] }>('/api/subscriptions')
+    const [out, ch] = await Promise.all([
+      api.get<{ subscriptions: Subscription[] }>('/api/subscriptions'),
+      api.get<{ channels: { enabled: boolean }[] }>('/api/channels'),
+    ])
     items.value = out.subscriptions
+    hasEnabledChannel.value = ch.channels.some((c) => c.enabled)
   } catch (e) {
     err.value = errorMessage(e)
   }
@@ -148,7 +154,12 @@ async function remove(row: Subscription): Promise<void> {
       <p class="hint" v-if="draft.source_type === 'github'">
         通过 GitHub API 追踪仓库发布：版本范围用 GitHub 官方的正式版 / 预发布标记判定（不靠标题猜测），并能翻页获取 releases.atom 只保留最近约 10 条之外的更早版本。源类型添加后不可更改，需要换类型请删除后重新添加。
       </p>
-      <div class="form-actions"><button class="primary" type="submit" :disabled="busy">添加订阅</button></div>
+      <p class="hint" v-if="!hasEnabledChannel">
+        还没有启用的通知渠道，订阅的首轮基线通知会丢失。请先到
+        <RouterLink to="/channels">通知方式</RouterLink>
+        添加并启用至少一个渠道，再回来添加订阅。
+      </p>
+      <div class="form-actions"><button class="primary" type="submit" :disabled="busy || !hasEnabledChannel" :title="!hasEnabledChannel ? '请先启用至少一个通知渠道' : ''">添加订阅</button></div>
     </form>
   </div>
 

@@ -333,14 +333,17 @@ func TestAdminUserDrillDownIsReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The first channel is seeded so alice can subscribe; it is also the one
+	// the admin will disable (it stays first in ID order for later assertions).
+	channelID := seedEnabledChannel(t, db, aliceID)
+
 	alice := login(t, ts, "alice", "alice-pass")
 	alice.do(http.MethodPost, "/api/subscriptions",
 		map[string]string{"url": "https://example.com/a.atom"}, http.StatusCreated)
-	created := alice.do(http.MethodPost, "/api/channels", map[string]any{
+	alice.do(http.MethodPost, "/api/channels", map[string]any{
 		"type": "telegram", "fields": map[string]string{"chat_id": "1"},
 		"secrets": map[string]string{"token": "123:abc"},
 	}, http.StatusCreated)
-	channelID := int64(created["id"].(float64))
 
 	// A regular user must not reach the drill-down.
 	alice.do(http.MethodGet, "/api/admin/users/"+itoa(aliceID), nil, http.StatusForbidden)
@@ -351,7 +354,7 @@ func TestAdminUserDrillDownIsReadOnly(t *testing.T) {
 		t.Fatalf("unexpected detail: %+v", detail)
 	}
 	counts := detail["counts"].(map[string]any)
-	if counts["subscriptions"].(float64) != 1 || counts["channels"].(float64) != 1 {
+	if counts["subscriptions"].(float64) != 1 || counts["channels"].(float64) != 2 {
 		t.Fatalf("unexpected counts: %+v", counts)
 	}
 

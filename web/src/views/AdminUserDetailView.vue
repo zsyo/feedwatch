@@ -54,6 +54,7 @@ const user = ref<ManagedUser | null>(null)
 const counts = ref<Record<string, number>>({})
 const subscriptions = ref<Subscription[]>([])
 const channels = ref<Channel[]>([])
+const enabledChannelCount = computed(() => channels.value.filter((c) => c.enabled).length)
 const deliveries = ref<Delivery[]>([])
 const err = ref('')
 const notice = ref('')
@@ -181,7 +182,7 @@ async function toggleChannel(row: Channel): Promise<void> {
               <div class="hint">{{ stateText[row.secret_state] }}</div>
             </td>
             <td><span class="badge" :class="row.enabled ? 'badge-on' : 'badge-off'">{{ row.enabled ? '启用' : '停用' }}</span></td>
-            <td><button class="small" type="button" @click="toggleChannel(row)">{{ row.enabled ? '停用' : '启用' }}</button></td>
+            <td><button class="small" type="button" :disabled="row.enabled && enabledChannelCount <= 1" :title="row.enabled && enabledChannelCount <= 1 ? '请至少保留一个启用的通知渠道' : ''" @click="toggleChannel(row)">{{ row.enabled ? '停用' : '启用' }}</button></td>
           </tr>
           <tr v-if="!channels.length"><td colspan="5" class="empty">该用户没有通知渠道。</td></tr>
         </tbody>

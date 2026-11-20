@@ -232,6 +232,22 @@ func (s *Server) adminSetChannelEnabled(w http.ResponseWriter, r *http.Request, 
 	if !ok {
 		return
 	}
+	if !enabled {
+		// Only guard a real disable of a currently-enabled channel; a missing
+		// channel is left to the UPDATE below to report as 404.
+		current, err := s.loadChannel(userID, channelID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				fail(w, http.StatusNotFound, "not_found", "channel not found")
+				return
+			}
+			fail(w, http.StatusInternalServerError, "db_error", err.Error())
+			return
+		}
+		if current.Enabled && !s.guardEnabledChannelRemoval(w, userID, channelID) {
+			return
+		}
+	}
 	res, err := s.db.Exec(`UPDATE channels SET enabled=? WHERE id=? AND user_id=?`,
 		boolInt(enabled), channelID, userID)
 	if err != nil {
