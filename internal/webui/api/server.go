@@ -134,12 +134,13 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 
 func publicUser(u auth.User) map[string]any {
 	return map[string]any{
-		"id":                   u.ID,
-		"username":             u.Username,
-		"role":                 u.Role,
-		"must_change_password": u.MustChangePassword,
-		"timezone":             u.Timezone,
-		"notify_mode":          u.NotifyMode,
+		"id":                    u.ID,
+		"username":              u.Username,
+		"role":                  u.Role,
+		"must_change_password":  u.MustChangePassword,
+		"timezone":              u.Timezone,
+		"notify_mode":           u.NotifyMode,
+		"baseline_on_subscribe": u.BaselineOnSubscribe,
 		// password_set tells the SPA whether to ask for the current password
 		// and whether unbinding the last provider would lock the account out.
 		"password_set": u.PasswordHash != "",

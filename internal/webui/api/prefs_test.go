@@ -131,6 +131,43 @@ func TestPreferencesNotifyModeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPreferencesBaselineOnSubscribeRoundTrip(t *testing.T) {
+	ts, db := newTestServer(t)
+	c := login(t, ts, "alice", "alice-pass")
+
+	me := c.do(http.MethodGet, "/api/auth/me", nil, http.StatusOK)
+	user, _ := me["user"].(map[string]any)
+	if user["baseline_on_subscribe"] != true {
+		t.Fatalf("new account should send baselines by default, got %v", user["baseline_on_subscribe"])
+	}
+
+	out := c.do(http.MethodPatch, "/api/me", map[string]any{"baseline_on_subscribe": false}, http.StatusOK)
+	if out["baseline_on_subscribe"] != false {
+		t.Fatalf("PATCH /api/me = %+v", out)
+	}
+	var stored int
+	if err := db.QueryRow(`SELECT baseline_on_subscribe FROM users WHERE username='alice'`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 0 {
+		t.Fatalf("stored baseline_on_subscribe = %d", stored)
+	}
+
+	// The choice travels with the account, not the session.
+	me = login(t, ts, "alice", "alice-pass").do(http.MethodGet, "/api/auth/me", nil, http.StatusOK)
+	user, _ = me["user"].(map[string]any)
+	if user["baseline_on_subscribe"] != false {
+		t.Fatalf("new session did not see the stored opt-out: %+v", user)
+	}
+
+	// Patching an unrelated preference must not re-enable it.
+	c.do(http.MethodPatch, "/api/me", map[string]string{"notify_mode": "per_feed"}, http.StatusOK)
+	out = c.do(http.MethodPatch, "/api/me", map[string]any{"baseline_on_subscribe": true}, http.StatusOK)
+	if out["baseline_on_subscribe"] != true || out["notify_mode"] != "per_feed" {
+		t.Fatalf("re-enable clobbered another preference: %+v", out)
+	}
+}
+
 // Administrators configure no subscriptions, but their own display zone is still
 // theirs to set.
 func TestPreferencesAllowedForAdmin(t *testing.T) {

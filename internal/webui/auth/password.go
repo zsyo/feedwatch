@@ -31,6 +31,10 @@ type User struct {
 	// lives on the account because a cycle can produce both shapes for the same
 	// user when subscriptions disagree.
 	NotifyMode string
+	// BaselineOnSubscribe controls the immediate current-version snapshot after
+	// subscribing or re-enabling. Users who only want update notifications turn
+	// it off; the seen baseline is still copied either way.
+	BaselineOnSubscribe bool
 }
 
 func IsAdmin(u User) bool { return u.Role == "admin" }

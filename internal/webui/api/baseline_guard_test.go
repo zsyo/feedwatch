@@ -108,6 +108,46 @@ func TestReEnableTriggersBaselineButOtherPatchesDoNot(t *testing.T) {
 	}
 }
 
+func TestBaselineOptOutSuppressesSubscribeAndReEnable(t *testing.T) {
+	fake := newFakeBaseline()
+	ts, db := newTestServer(t, WithBaseline(fake))
+	aliceID := userIDByName(t, db, "alice")
+	seedEnabledChannel(t, db, aliceID)
+	c := login(t, ts, "alice", "alice-pass")
+
+	c.do(http.MethodPatch, "/api/me", map[string]any{"baseline_on_subscribe": false}, http.StatusOK)
+
+	// A fresh subscription must not push the current-version snapshot.
+	c.do(http.MethodPost, "/api/subscriptions",
+		map[string]string{"url": "https://example.com/optout.atom", "display_name": "Go"}, http.StatusCreated)
+
+	// Neither must a 0->1 re-enable, the other baseline trigger.
+	mustExec(t, db, `INSERT INTO subscriptions (user_id, url, url_key, display_name, source_type, filter_json, notify_policy, enabled)
+		VALUES (?,?,?,?,?,?,?,0)`, aliceID, "https://example.com/reopt.atom", "key-reopt", "Go", "atom", "{}", "on_update")
+	var subID int64
+	if err := db.QueryRow(`SELECT id FROM subscriptions WHERE url_key=?`, "key-reopt").Scan(&subID); err != nil {
+		t.Fatal(err)
+	}
+	c.do(http.MethodPatch, "/api/subscriptions/"+itoa(subID),
+		map[string]any{"enabled": true}, http.StatusOK)
+
+	// The trigger is synchronous up to the goroutine; wait briefly so a stray
+	// fire-and-forget push would still be observed.
+	time.Sleep(200 * time.Millisecond)
+	if got := fake.count(); got != 0 {
+		t.Fatalf("opted-out account triggered %d baselines", got)
+	}
+
+	// Turning the preference back on restores the behaviour.
+	c.do(http.MethodPatch, "/api/me", map[string]any{"baseline_on_subscribe": true}, http.StatusOK)
+	c.do(http.MethodPost, "/api/subscriptions",
+		map[string]string{"url": "https://example.com/backon.atom", "display_name": "Go"}, http.StatusCreated)
+	call := fake.wait(t)
+	if call.userID != aliceID || call.urlKey == "" {
+		t.Fatalf("bad baseline after re-enabling preference: %+v", call)
+	}
+}
+
 func TestNilBaselineDoesNotPanic(t *testing.T) {
 	// Default newTestServer has no baseline; subscribe and re-enable must still
 	// work (the trigger is a no-op).

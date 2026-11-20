@@ -1,4 +1,4 @@
--- FeedWatch WebUI schema for MySQL 8.0.13+, version 8.
+-- FeedWatch WebUI schema for MySQL 8.0.13+, version 9.
 -- MySQL-only deviations from the SQLite twin, all deliberate:
 --   * TIMESTAMP-ish, URL and key columns are VARCHAR/CHAR, because InnoDB
 --     cannot index TEXT without a prefix length and TEXT cannot take a
@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
   must_change_password  INTEGER NOT NULL DEFAULT 0,
   timezone              VARCHAR(64) NOT NULL DEFAULT '',
   notify_mode           VARCHAR(32) NOT NULL DEFAULT 'digest',
+  baseline_on_subscribe INTEGER NOT NULL DEFAULT 1,
   created_at            VARCHAR(40) NOT NULL,
   updated_at            VARCHAR(40) NOT NULL,
   CONSTRAINT ck_users_role CHECK (role IN ('admin', 'user')),

@@ -12,7 +12,7 @@ import (
 // schemaVersion is the version this binary expects. It is recorded in the
 // schema_migrations table, and mirrored into PRAGMA user_version on SQLite so
 // databases created by 1.1.x keep migrating through the same path.
-const schemaVersion = 8
+const schemaVersion = 9
 
 //go:embed schema_sqlite.sql
 var schemaSQLite string

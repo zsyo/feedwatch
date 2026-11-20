@@ -1,4 +1,4 @@
--- FeedWatch WebUI schema for SQLite, version 8.
+-- FeedWatch WebUI schema for SQLite, version 9.
 -- Executed statement by statement by migrate.go; indexes are created there too
 -- (MySQL has no CREATE INDEX IF NOT EXISTS, so they cannot live in this file).
 -- Timestamp columns are RFC3339 UTC strings so they sort lexicographically.
@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS users (
   -- produce both shapes, which is more messages than the user asked for and
   -- impossible to predict from the subscription list.
   notify_mode           TEXT NOT NULL DEFAULT 'digest' CHECK (notify_mode IN ('digest', 'per_feed')),
+  -- Whether subscribing (or re-enabling) immediately pushes a current-version
+  -- snapshot. Off for users who only want to hear about new releases; copying
+  -- the global seen baseline still happens either way.
+  baseline_on_subscribe INTEGER NOT NULL DEFAULT 1,
   created_at            TEXT NOT NULL,
   updated_at            TEXT NOT NULL
 );

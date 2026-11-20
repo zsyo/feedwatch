@@ -23,26 +23,27 @@ const (
 
 // updatePreferences handles PATCH /api/me. These are account preferences, not
 // server behaviour, so they change nothing about polling or delivery timing:
-// timezone is display-only, and notify_mode only decides how one cycle's new
-// releases are grouped into messages. Either field may be sent alone; sending
-// both updates both. Credentials and role changes stay on their own
-// admin-only endpoints.
+// timezone is display-only, notify_mode only decides how one cycle's new
+// releases are grouped into messages, and baseline_on_subscribe only controls
+// the snapshot pushed right after subscribing. Any subset may be sent.
+// Credentials and role changes stay on their own admin-only endpoints.
 func (s *Server) updatePreferences(w http.ResponseWriter, r *http.Request, c Ctx) {
 	var req struct {
-		Timezone   *string `json:"timezone"`
-		NotifyMode *string `json:"notify_mode"`
+		Timezone            *string `json:"timezone"`
+		NotifyMode          *string `json:"notify_mode"`
+		BaselineOnSubscribe *bool   `json:"baseline_on_subscribe"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		fail(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if req.Timezone == nil && req.NotifyMode == nil {
-		fail(w, http.StatusBadRequest, "bad_request", "timezone or notify_mode is required")
+	if req.Timezone == nil && req.NotifyMode == nil && req.BaselineOnSubscribe == nil {
+		fail(w, http.StatusBadRequest, "bad_request", "a preference field is required")
 		return
 	}
 
-	sets := make([]string, 0, 2)
-	args := make([]any, 0, 3)
+	sets := make([]string, 0, 3)
+	args := make([]any, 0, 4)
 	if req.Timezone != nil {
 		tz, err := normalizeTimezone(*req.Timezone)
 		if err != nil {
@@ -61,6 +62,10 @@ func (s *Server) updatePreferences(w http.ResponseWriter, r *http.Request, c Ctx
 		sets = append(sets, "notify_mode=?")
 		args = append(args, mode)
 	}
+	if req.BaselineOnSubscribe != nil {
+		sets = append(sets, "baseline_on_subscribe=?")
+		args = append(args, boolToInt(*req.BaselineOnSubscribe))
+	}
 	args = append(args, store.Now(), c.User.ID)
 	if _, err := s.db.Exec(`UPDATE users SET `+strings.Join(sets, ", ")+`, updated_at=? WHERE id=?`, args...); err != nil {
 		fail(w, http.StatusInternalServerError, "update_failed", err.Error())
@@ -70,12 +75,17 @@ func (s *Server) updatePreferences(w http.ResponseWriter, r *http.Request, c Ctx
 	// Read back instead of echoing the request: normalizeTimezone may fold a
 	// value ("Local" becomes ""), and the SPA needs the stored form.
 	var tz, mode string
-	if err := s.db.QueryRow(`SELECT timezone, notify_mode FROM users WHERE id=?`, c.User.ID).
-		Scan(&tz, &mode); err != nil {
+	var baseline int
+	if err := s.db.QueryRow(`SELECT timezone, notify_mode, baseline_on_subscribe FROM users WHERE id=?`, c.User.ID).
+		Scan(&tz, &mode, &baseline); err != nil {
 		fail(w, http.StatusInternalServerError, "update_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"timezone": tz, "notify_mode": mode})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"timezone":              tz,
+		"notify_mode":           mode,
+		"baseline_on_subscribe": baseline != 0,
+	})
 }
 
 // normalizeNotifyMode accepts the two shapes the UI offers plus an empty string,

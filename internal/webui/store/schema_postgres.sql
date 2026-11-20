@@ -1,4 +1,4 @@
--- FeedWatch WebUI schema for PostgreSQL 12+, version 8.
+-- FeedWatch WebUI schema for PostgreSQL 12+, version 9.
 -- PostgreSQL accepts the SQLite column types (TEXT/INTEGER) as-is; the only
 -- translation is the auto-increment primary key, which becomes an identity
 -- column. Indexes are created by migrate.go so all three dialects share one
@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
   must_change_password  INTEGER NOT NULL DEFAULT 0,
   timezone              TEXT NOT NULL DEFAULT '',
   notify_mode           TEXT NOT NULL DEFAULT 'digest' CHECK (notify_mode IN ('digest', 'per_feed')),
+  baseline_on_subscribe INTEGER NOT NULL DEFAULT 1,
   created_at            TEXT NOT NULL,
   updated_at            TEXT NOT NULL
 );

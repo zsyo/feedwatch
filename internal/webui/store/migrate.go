@@ -49,6 +49,16 @@ var incrementalColumns = []columnDecl{
 		},
 	},
 	{
+		// v9: opt-out for the snapshot pushed right after subscribing. Existing
+		// accounts keep the current behaviour (1) until they change it.
+		table: "users", column: "baseline_on_subscribe",
+		decl: map[Dialect]string{
+			SQLite:   "INTEGER NOT NULL DEFAULT 1",
+			MySQL:    "INTEGER NOT NULL DEFAULT 1",
+			Postgres: "INTEGER NOT NULL DEFAULT 1",
+		},
+	},
+	{
 		// v6 columns. ALTER TABLE ADD COLUMN cannot declare UNIQUE, and every
 		// pre-existing row has preset_key='', so preset_key becomes unique
 		// through the partial index in schemaIndexes, not through the column.

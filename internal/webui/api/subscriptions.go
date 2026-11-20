@@ -238,9 +238,21 @@ func (s *Server) subscribeURL(userID int64, in subscribeInput) (string, *writeEr
 
 // triggerBaseline schedules an immediate baseline snapshot on a detached
 // context. It is a no-op when no BaselineSource is configured (tests, or a
-// build that opts out). Errors are logged, never surfaced to the subscriber.
+// build that opts out), or when the account turned the snapshot off in its
+// preferences. The preference is read here rather than passed in so every
+// subscribe path (including catalog one-click) obeys it. Errors are logged,
+// never surfaced to the subscriber.
 func (s *Server) triggerBaseline(userID int64, url, urlKey, sourceType, filterJSON, displayName string) {
 	if s.baseline == nil {
+		return
+	}
+	var enabled int
+	if err := s.db.QueryRow(`SELECT baseline_on_subscribe FROM users WHERE id=?`, userID).
+		Scan(&enabled); err != nil {
+		s.log.Warn("webui: load baseline preference failed", "user", userID, "error", err)
+		return
+	}
+	if enabled == 0 {
 		return
 	}
 	go func() {

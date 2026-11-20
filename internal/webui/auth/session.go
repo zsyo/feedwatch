@@ -71,10 +71,10 @@ func tokenHash(raw string) string {
 // login timing does not reveal which usernames exist.
 func (m *Manager) Authenticate(username, password string) (User, error) {
 	var u User
-	var active, mustChange int
-	err := m.db.QueryRow(`SELECT id, username, password_hash, role, is_active, must_change_password, timezone, notify_mode
+	var active, mustChange, baselineOnSubscribe int
+	err := m.db.QueryRow(`SELECT id, username, password_hash, role, is_active, must_change_password, timezone, notify_mode, baseline_on_subscribe
 		FROM users WHERE username=?`, username).Scan(
-		&u.ID, &u.Username, &u.PasswordHash, &u.Role, &active, &mustChange, &u.Timezone, &u.NotifyMode,
+		&u.ID, &u.Username, &u.PasswordHash, &u.Role, &active, &mustChange, &u.Timezone, &u.NotifyMode, &baselineOnSubscribe,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		VerifyPassword("", password)
@@ -85,6 +85,7 @@ func (m *Manager) Authenticate(username, password string) (User, error) {
 	}
 	u.IsActive = active != 0
 	u.MustChangePassword = mustChange != 0
+	u.BaselineOnSubscribe = baselineOnSubscribe != 0
 	if !VerifyPassword(u.PasswordHash, password) {
 		return User{}, ErrInvalidCredentials
 	}
@@ -100,10 +101,10 @@ func (m *Manager) Authenticate(username, password string) (User, error) {
 // without going through a username lookup.
 func (m *Manager) LoadUser(id int64) (User, error) {
 	var u User
-	var active, mustChange int
-	err := m.db.QueryRow(`SELECT id, username, password_hash, role, is_active, must_change_password, timezone, notify_mode
+	var active, mustChange, baselineOnSubscribe int
+	err := m.db.QueryRow(`SELECT id, username, password_hash, role, is_active, must_change_password, timezone, notify_mode, baseline_on_subscribe
 		FROM users WHERE id=?`, id).Scan(
-		&u.ID, &u.Username, &u.PasswordHash, &u.Role, &active, &mustChange, &u.Timezone, &u.NotifyMode,
+		&u.ID, &u.Username, &u.PasswordHash, &u.Role, &active, &mustChange, &u.Timezone, &u.NotifyMode, &baselineOnSubscribe,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrInvalidCredentials
@@ -113,6 +114,7 @@ func (m *Manager) LoadUser(id int64) (User, error) {
 	}
 	u.IsActive = active != 0
 	u.MustChangePassword = mustChange != 0
+	u.BaselineOnSubscribe = baselineOnSubscribe != 0
 	return u, nil
 }
 
@@ -154,12 +156,12 @@ func (m *Manager) LookupSession(raw string) (Session, User, error) {
 	var s Session
 	var u User
 	var expires, lastSeen string
-	var active, mustChange int
+	var active, mustChange, baselineOnSubscribe int
 	err := m.db.QueryRow(`SELECT s.token_hash, s.user_id, s.csrf_token, s.expires_at, s.last_seen_at,
-		u.id, u.username, u.password_hash, u.role, u.is_active, u.must_change_password, u.timezone, u.notify_mode
+		u.id, u.username, u.password_hash, u.role, u.is_active, u.must_change_password, u.timezone, u.notify_mode, u.baseline_on_subscribe
 		FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash=?`, hash).Scan(
 		&s.TokenHash, &s.UserID, &s.CSRFToken, &expires, &lastSeen,
-		&u.ID, &u.Username, &u.PasswordHash, &u.Role, &active, &mustChange, &u.Timezone, &u.NotifyMode,
+		&u.ID, &u.Username, &u.PasswordHash, &u.Role, &active, &mustChange, &u.Timezone, &u.NotifyMode, &baselineOnSubscribe,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, User{}, ErrSessionInvalid
@@ -174,6 +176,7 @@ func (m *Manager) LookupSession(raw string) (Session, User, error) {
 	s.LastSeenAt, _ = time.Parse(time.RFC3339Nano, lastSeen)
 	u.IsActive = active != 0
 	u.MustChangePassword = mustChange != 0
+	u.BaselineOnSubscribe = baselineOnSubscribe != 0
 	if time.Now().UTC().After(s.ExpiresAt) {
 		m.DeleteSession(raw)
 		return Session{}, User{}, ErrSessionExpired
