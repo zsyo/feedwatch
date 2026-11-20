@@ -37,6 +37,9 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("GET /api/me/identities", s.handle(accessMember, false, s.listIdentities))
 	mux.Handle("DELETE /api/me/identities/{provider}", s.handle(accessMember, false, s.unlinkIdentity))
 	mux.Handle("GET /api/channel-fields", s.handle(accessAny, false, s.channelFields))
+	// The live sample uses the channel form's values but never a credential.
+	// accessMember matches channel CRUD: administrators do not own channels.
+	mux.Handle("POST /api/channels/preview", s.handle(accessMember, false, s.channelPreview))
 
 	// Regular users only
 	mux.Handle("GET /api/subscriptions", s.handle(accessMember, false, s.listSubscriptions))

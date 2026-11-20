@@ -58,6 +58,30 @@ func (s *Server) channelFields(w http.ResponseWriter, _ *http.Request, _ Ctx) {
 	})
 }
 
+// channelPreviewInput mirrors the write form. Only type and the non-secret
+// fields take part: credentials are neither required nor accepted for a preview.
+type channelPreviewInput struct {
+	Type   string            `json:"type"`
+	Kind   string            `json:"kind"`
+	Fields map[string]string `json:"fields"`
+}
+
+// channelPreview renders a golang sample with the same notifier code used for
+// real delivery. It writes nothing, sends nothing, and never touches secrets.
+func (s *Server) channelPreview(w http.ResponseWriter, r *http.Request, _ Ctx) {
+	var input channelPreviewInput
+	if err := decodeJSON(w, r, &input); err != nil {
+		fail(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	preview, err := webui.PreviewChannel(input.Type, input.Kind, input.Fields)
+	if err != nil {
+		writeChannelError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, preview)
+}
+
 func (s *Server) channelsFor(userID int64) ([]channelView, error) {
 	rows, err := s.db.Query(`SELECT c.id, c.type, c.name, c.config_json, c.enabled,
 			COALESCE(sec.ciphertext, '')
