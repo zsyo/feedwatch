@@ -5,6 +5,8 @@ package api
 import (
 	"net/http"
 	"testing"
+
+	"feedwatch/internal/webui/store"
 )
 
 func errorCode(t *testing.T, out map[string]any) string {
@@ -15,6 +17,18 @@ func errorCode(t *testing.T, out map[string]any) string {
 	}
 	code, _ := errObj["code"].(string)
 	return code
+}
+
+// seedSubscription inserts a subscription directly with explicit enabled and
+// deleted_at state. key must be unique per subscription.
+func seedSubscription(t *testing.T, db *store.DB, userID int64, key string, enabled, deleted bool) {
+	t.Helper()
+	var deletedAt any
+	if deleted {
+		deletedAt = store.Now()
+	}
+	mustExec(t, db, `INSERT INTO subscriptions (user_id, url, url_key, enabled, deleted_at)
+		VALUES (?,?,?,?,?)`, userID, "https://example.com/"+key+".atom", key, boolInt(enabled), deletedAt)
 }
 
 func TestSubscribeRequiresEnabledChannel(t *testing.T) {
@@ -81,7 +95,7 @@ func TestQuickSubscribeRequiresEnabledChannel(t *testing.T) {
 	}
 }
 
-func TestChannelDeletionKeepsOneEnabled(t *testing.T) {
+func TestChannelDeletionWithoutSubscriptionsAllowed(t *testing.T) {
 	ts, db := newTestServer(t)
 	aliceID := userIDByName(t, db, "alice")
 	first := seedEnabledChannel(t, db, aliceID)
@@ -89,12 +103,91 @@ func TestChannelDeletionKeepsOneEnabled(t *testing.T) {
 	c := login(t, ts, "alice", "alice-pass")
 
 	c.do(http.MethodDelete, "/api/channels/"+itoa(first), nil, http.StatusOK)
-	out := c.do(http.MethodDelete, "/api/channels/"+itoa(second), nil, http.StatusBadRequest)
-	if got := errorCode(t, out); got != lastEnabledChannelCode {
-		t.Fatalf("error code = %q, want %s", got, lastEnabledChannelCode)
+	// No subscriptions: deleting the last enabled channel is now allowed.
+	c.do(http.MethodDelete, "/api/channels/"+itoa(second), nil, http.StatusOK)
+	if got := catalogCount(t, db, `SELECT COUNT(*) FROM channels`); got != 0 {
+		t.Fatalf("channels = %d, want 0", got)
+	}
+}
+
+func TestDeleteLastChannelWithSubscriptionRejected(t *testing.T) {
+	ts, db := newTestServer(t)
+	aliceID := userIDByName(t, db, "alice")
+	id := seedEnabledChannel(t, db, aliceID)
+	seedSubscription(t, db, aliceID, "sub-live", true, false)
+	c := login(t, ts, "alice", "alice-pass")
+
+	out := c.do(http.MethodDelete, "/api/channels/"+itoa(id), nil, http.StatusBadRequest)
+	if got := errorCode(t, out); got != lastChannelSubscribedCode {
+		t.Fatalf("error code = %q, want %s", got, lastChannelSubscribedCode)
 	}
 	if got := catalogCount(t, db, `SELECT COUNT(*) FROM channels`); got != 1 {
 		t.Fatalf("channels = %d, want 1", got)
+	}
+}
+
+func TestDeletedSubscriptionDoesNotBlockDeletion(t *testing.T) {
+	ts, db := newTestServer(t)
+	aliceID := userIDByName(t, db, "alice")
+	id := seedEnabledChannel(t, db, aliceID)
+	// A soft-deleted subscription must not block removal of the last channel.
+	seedSubscription(t, db, aliceID, "sub-deleted", true, true)
+	c := login(t, ts, "alice", "alice-pass")
+
+	c.do(http.MethodDelete, "/api/channels/"+itoa(id), nil, http.StatusOK)
+	if got := catalogCount(t, db, `SELECT COUNT(*) FROM channels`); got != 0 {
+		t.Fatalf("channels = %d, want 0", got)
+	}
+}
+
+func TestDisabledSubscriptionBlocksDeletion(t *testing.T) {
+	ts, db := newTestServer(t)
+	aliceID := userIDByName(t, db, "alice")
+	id := seedEnabledChannel(t, db, aliceID)
+	// "stopped subscriptions count too": enabled=0 still blocks.
+	seedSubscription(t, db, aliceID, "sub-stopped", false, false)
+	c := login(t, ts, "alice", "alice-pass")
+
+	out := c.do(http.MethodDelete, "/api/channels/"+itoa(id), nil, http.StatusBadRequest)
+	if got := errorCode(t, out); got != lastChannelSubscribedCode {
+		t.Fatalf("error code = %q, want %s", got, lastChannelSubscribedCode)
+	}
+}
+
+func TestDeletingChannelWithAnotherEnabledStaysAllowed(t *testing.T) {
+	ts, db := newTestServer(t)
+	aliceID := userIDByName(t, db, "alice")
+	first := seedEnabledChannel(t, db, aliceID)
+	second := seedEnabledChannel(t, db, aliceID)
+	seedSubscription(t, db, aliceID, "sub-kept", true, false)
+	c := login(t, ts, "alice", "alice-pass")
+
+	// Subscription present, but deleting one of two enabled channels is fine.
+	c.do(http.MethodDelete, "/api/channels/"+itoa(first), nil, http.StatusOK)
+	// Now the remaining one is the last enabled channel -> guarded.
+	out := c.do(http.MethodDelete, "/api/channels/"+itoa(second), nil, http.StatusBadRequest)
+	if got := errorCode(t, out); got != lastChannelSubscribedCode {
+		t.Fatalf("error code = %q, want %s", got, lastChannelSubscribedCode)
+	}
+}
+
+func TestDeleteLastChannelGuardIsPerUser(t *testing.T) {
+	ts, db := newTestServer(t)
+	mustUser(t, db, "bob", "bob-pass", "user", 0)
+	aliceID := userIDByName(t, db, "alice")
+	bobID := userIDByName(t, db, "bob")
+	aliceCh := seedEnabledChannel(t, db, aliceID)
+	bobCh := seedEnabledChannel(t, db, bobID)
+	// Only bob has a subscription; alice's last channel stays deletable.
+	seedSubscription(t, db, bobID, "sub-bob", true, false)
+
+	alice := login(t, ts, "alice", "alice-pass")
+	alice.do(http.MethodDelete, "/api/channels/"+itoa(aliceCh), nil, http.StatusOK)
+
+	bob := login(t, ts, "bob", "bob-pass")
+	out := bob.do(http.MethodDelete, "/api/channels/"+itoa(bobCh), nil, http.StatusBadRequest)
+	if got := errorCode(t, out); got != lastChannelSubscribedCode {
+		t.Fatalf("error code = %q, want %s", got, lastChannelSubscribedCode)
 	}
 }
 

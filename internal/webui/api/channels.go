@@ -108,6 +108,9 @@ func (s *Server) hasEnabledChannel(userID int64) (bool, error) {
 const (
 	lastEnabledChannelCode    = "last_enabled_channel"
 	lastEnabledChannelMessage = "请至少保留一个启用的通知渠道，否则已有订阅将收不到通知"
+
+	lastChannelSubscribedCode    = "last_channel_subscribed"
+	lastChannelSubscribedMessage = "还有订阅（含已停用）未删除，无法删除最后一个通知渠道"
 )
 
 // guardEnabledChannelRemoval blocks an operation that would leave the user
@@ -122,6 +125,48 @@ func (s *Server) guardEnabledChannelRemoval(w http.ResponseWriter, userID, exclu
 	}
 	if n == 0 {
 		fail(w, http.StatusBadRequest, lastEnabledChannelCode, lastEnabledChannelMessage)
+		return false
+	}
+	return true
+}
+
+// guardChannelDeletion protects deletion of the last enabled channel. Unlike
+// disabling, deletion is allowed when the user has no subscriptions left: there
+// is nothing to go stale, and the empty state invites adding a fresh channel
+// and subscription. Disabled subscriptions still count (deleted_at IS NULL),
+// because re-enabling them later must not reveal a baseline that was skipped.
+// Deleting a disabled channel, or any channel while another enabled one stays,
+// is always allowed.
+func (s *Server) guardChannelDeletion(w http.ResponseWriter, userID, channelID int64) bool {
+	var selfEnabled int
+	if err := s.db.QueryRow(`SELECT enabled FROM channels WHERE id=? AND user_id=?`,
+		channelID, userID).Scan(&selfEnabled); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return true // let the DELETE report not_found
+		}
+		fail(w, http.StatusInternalServerError, "db_error", err.Error())
+		return false
+	}
+	if selfEnabled == 0 {
+		return true
+	}
+	var remaining int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM channels
+		WHERE user_id=? AND enabled=1 AND id<>?`, userID, channelID).Scan(&remaining); err != nil {
+		fail(w, http.StatusInternalServerError, "db_error", err.Error())
+		return false
+	}
+	if remaining > 0 {
+		return true
+	}
+	var subs int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM subscriptions
+		WHERE user_id=? AND deleted_at IS NULL`, userID).Scan(&subs); err != nil {
+		fail(w, http.StatusInternalServerError, "db_error", err.Error())
+		return false
+	}
+	if subs > 0 {
+		fail(w, http.StatusBadRequest, lastChannelSubscribedCode, lastChannelSubscribedMessage)
 		return false
 	}
 	return true
@@ -424,7 +469,7 @@ func (s *Server) deleteChannel(w http.ResponseWriter, r *http.Request, c Ctx) {
 		fail(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if !s.guardEnabledChannelRemoval(w, c.User.ID, id) {
+	if !s.guardChannelDeletion(w, c.User.ID, id) {
 		return
 	}
 	res, err := s.db.Exec(`DELETE FROM channels WHERE id=? AND user_id=?`, id, c.User.ID)

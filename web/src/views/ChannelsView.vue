@@ -403,7 +403,7 @@ function summary(ch: Channel): string[] {
               <div class="cell-actions">
                 <button class="small" type="button" @click="startEdit(ch)">编辑</button>
                 <button class="small" type="button" :disabled="ch.enabled && enabledCount <= 1" :title="ch.enabled && enabledCount <= 1 ? '请至少保留一个启用的通知渠道' : ''" @click="toggleEnabled(ch)">{{ ch.enabled ? '停用' : '启用' }}</button>
-                <button class="small" type="button" :disabled="ch.enabled && enabledCount <= 1" :title="ch.enabled && enabledCount <= 1 ? '请至少保留一个启用的通知渠道' : ''" @click="remove(ch)">删除</button>
+                <button class="small" type="button" :title="ch.enabled && enabledCount <= 1 ? '仍有订阅时无法删除最后一个启用的通知渠道' : ''" @click="remove(ch)">删除</button>
               </div>
             </td>
           </tr>
