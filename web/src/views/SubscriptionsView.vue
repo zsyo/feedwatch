@@ -146,7 +146,7 @@ async function remove(row: Subscription): Promise<void> {
         </label>
       </div>
       <p class="hint" v-if="draft.source_type === 'github'">
-        追踪没有 releases.atom 的仓库；版本范围按 GitHub 的正式版 / 预发布标记判断。源类型添加后不可更改，需要换类型请删除后重新添加。
+        通过 GitHub API 追踪仓库发布：版本范围用 GitHub 官方的正式版 / 预发布标记判定（不靠标题猜测），并能翻页获取 releases.atom 只保留最近约 10 条之外的更早版本。源类型添加后不可更改，需要换类型请删除后重新添加。
       </p>
       <div class="form-actions"><button class="primary" type="submit" :disabled="busy">添加订阅</button></div>
     </form>

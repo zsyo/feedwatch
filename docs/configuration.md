@@ -24,7 +24,7 @@ feeds:
     options:
       content_policy: text   # none | text | html
 
-  # GitHub Releases：给没有 releases.atom 的仓库用；url 填 owner/repo
+  # GitHub Releases：按 GitHub 官方的正式版 / 预发布标记判定范围，可翻页拿到更早版本；url 填 owner/repo
   - name: acme/app
     type: github
     url: acme/app

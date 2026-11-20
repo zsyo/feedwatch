@@ -160,7 +160,7 @@ function kindOf(key: string): string {
   <div class="card">
     <h2>GitHub 访问凭据</h2>
     <p class="card-sub">
-      用于追踪没有 releases.atom 的仓库。留空表示不修改已保存的 token；密文加密存放，页面不会回显。匿名访问每小时 60 次，带 token 每小时 5000 次。
+      用于提高 GitHub Releases 源的 API 限额并启用批量查询：版本范围按 GitHub 官方的正式版 / 预发布标记判定（不靠标题猜测），还能翻页拿到 releases.atom 只保留最近约 10 条之外的更早版本。留空表示不修改已保存的 token；密文加密存放，页面不会回显。匿名访问每小时 60 次，带 token 每小时 5000 次。
     </p>
     <div class="form-row">
       <label>GitHub token

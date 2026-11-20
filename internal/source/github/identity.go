@@ -1,7 +1,8 @@
-// Package github implements source.Source for GitHub Releases. It covers
-// repositories that do not publish a releases.atom feed: the REST API exposes
-// the same information with authoritative prerelease/draft flags, plus ETag
-// and conditional requests for cheap polling.
+// Package github implements source.Source for GitHub Releases. It reads a
+// repository's releases through the REST API, where GitHub's authoritative
+// prerelease/draft flags decide version scope and paging reaches further back
+// than the ~10 entries a releases.atom feed keeps. ETag and conditional
+// requests keep polling cheap.
 package github
 
 import (

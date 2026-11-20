@@ -24,7 +24,7 @@ feeds:
     options:
       content_policy: text   # none | text | html
 
-  # GitHub Releases: for repos without releases.atom; url is owner/repo
+  # GitHub Releases: version scope uses GitHub's stable/prerelease flags and can page back further; url is owner/repo
   - name: acme/app
     type: github
     url: acme/app
