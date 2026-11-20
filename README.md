@@ -28,6 +28,7 @@
 | [快速开始](#quick-start) | 本地 Windows exe 构建、`config.yaml` 生成、dry-run 调试路径 |
 | [CLI 参数与环境变量](#cli) | flag / 环境变量优先级、敏感信息只从环境变量读 |
 | [配置速览](#config-overview) | 配置文件分层、新增 feed / 渠道的最小改动 |
+| [开源协议](#license) | MIT，可自由使用、修改与商用 |
 
 **详细文档（`docs/`）**
 
@@ -135,6 +136,12 @@ $env:RESEND_API_KEY="re_xxx"
 - 新增一个通知渠道 = 在 `notify.channels` 加一段、配好环境变量，**零代码改动**；可多个并存。
 
 完整字段、过滤规则与 `type: github` 用法见 [配置详解](docs/configuration.md)；渠道参数见 [通知渠道](docs/notifications.md)；限速见 [并发与频率控制](docs/rate-limiting.md)；部署见 [Docker 部署](docs/docker.md)。
+
+<a id="license"></a>
+
+## 开源协议
+
+本项目采用 [MIT 协议](LICENSE)，可自由使用、修改与商用，只需保留版权声明。
 
 ---
 

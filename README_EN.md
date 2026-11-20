@@ -28,6 +28,7 @@ The main README keeps only the "project overview + core behavior + quick start";
 | [Quick Start](#quick-start) | Local Windows exe build, generating `config.yaml`, dry-run debugging |
 | [CLI Flags & Environment Variables](#cli) | Flag / env-var precedence, secrets read only from env vars |
 | [Configuration at a Glance](#config-overview) | Config file layers, minimal edits to add a feed / channel |
+| [License](#license) | MIT, free to use, modify and distribute |
 
 **Detailed docs (`docs/en/`)**
 
@@ -135,6 +136,12 @@ Secrets are read only from environment variables: `RESEND_API_KEY` (the name can
 - Adding a notification channel = append a block in `notify.channels` and set its environment variables, **zero code changes**; several channels can coexist.
 
 Full fields, filter rules and `type: github` usage: [Configuration](docs/en/configuration.md). Channel parameters: [Notification Channels](docs/en/notifications.md). Throttling: [Concurrency & Rate Limiting](docs/en/rate-limiting.md). Deployment: [Docker Deployment](docs/en/docker.md).
+
+<a id="license"></a>
+
+## License
+
+This project is released under the [MIT License](LICENSE). You may use, modify and distribute it freely, including for commercial purposes, provided the copyright notice is retained.
 
 ---
 
