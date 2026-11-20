@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { api, errorMessage } from '../api'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
@@ -40,6 +40,17 @@ interface Channel {
   secret_state: 'ok' | 'missing' | 'error' | 'none'
 }
 
+interface ChannelPreview {
+  type: string
+  kind: string
+  format: 'html' | 'markdown' | 'text'
+  subject: string
+  body: string
+  payload: string
+}
+
+type PreviewKind = 'new_releases' | 'baseline'
+
 const types = ref<string[]>([])
 const schema = ref<Record<string, Field[]>>({})
 const items = ref<Channel[]>([])
@@ -61,6 +72,15 @@ const mode = ref<NotifyMode>('digest')
 const modeBusy = ref(false)
 const modeErr = ref('')
 const modeOk = ref('')
+
+// The preview is rendered by the server with the same templates and channel
+// adapters used for real delivery, so it cannot drift from what users get.
+const previewKind = ref<PreviewKind>('new_releases')
+const preview = ref<ChannelPreview | null>(null)
+const previewErr = ref('')
+const previewLoading = ref(false)
+let previewTimer: ReturnType<typeof setTimeout> | null = null
+let previewSeq = 0
 
 const enabledCount = computed(() => items.value.filter((c) => c.enabled).length)
 const fields = computed<Field[]>(() => schema.value[form.type] ?? [])
@@ -93,10 +113,50 @@ async function loadSchema(): Promise<void> {
     types.value = out.types
     schema.value = out.fields
     reset()
+    await refreshPreview()
   } catch (e) {
     err.value = errorMessage(e)
   }
 }
+
+async function refreshPreview(): Promise<void> {
+  const seq = ++previewSeq
+  previewLoading.value = true
+  try {
+    const out = await api.post<ChannelPreview>('/api/channels/preview', {
+      type: form.type,
+      kind: previewKind.value,
+      fields: { ...values.value },
+    })
+    if (seq !== previewSeq) return
+    preview.value = out
+    previewErr.value = ''
+  } catch (e) {
+    if (seq !== previewSeq) return
+    preview.value = null
+    previewErr.value = errorMessage(e)
+  } finally {
+    if (seq === previewSeq) previewLoading.value = false
+  }
+}
+
+function schedulePreview(): void {
+  if (previewTimer !== null) clearTimeout(previewTimer)
+  previewTimer = setTimeout(() => {
+    previewTimer = null
+    void refreshPreview()
+  }, 250)
+}
+
+// JSON.stringify turns the values map into a primitive so any field edit (not
+// just a replacement of the whole object) refreshes the sample after a debounce.
+watch(
+  () => [form.type, form.name, previewKind.value, JSON.stringify(values.value)].join('\u0000'),
+  () => schedulePreview(),
+)
+onUnmounted(() => {
+  if (previewTimer !== null) clearTimeout(previewTimer)
+})
 
 onMounted(async () => {
   // The account is loaded before the router lets this page render, so the saved
@@ -365,6 +425,42 @@ function summary(ch: Channel): string[] {
         <button v-if="editing !== null" class="ghost" type="button" @click="reset">取消编辑</button>
       </div>
     </form>
+  </div>
+
+  <div class="card">
+    <h2>通知内容预览</h2>
+    <p class="card-sub">
+      用示例订阅 golang/go（go1.27.4）按上方表单参数实时渲染，不会发送任何消息。名称只用于自己区分，不出现在通知内容里；凭据与目标地址不参与预览。
+    </p>
+    <div class="preview-toolbar">
+      <div class="choice-row" style="margin: 0">
+        <label class="inline-check">
+          <input v-model="previewKind" type="radio" value="new_releases" />
+          <span>发现新版本</span>
+        </label>
+        <label class="inline-check">
+          <input v-model="previewKind" type="radio" value="baseline" />
+          <span>当前版本基线</span>
+        </label>
+      </div>
+      <span class="muted preview-kind">
+        {{ form.type }} ·
+        {{ preview === null ? '—' : preview.format === 'html' ? 'HTML' : preview.format === 'markdown' ? 'Markdown' : '纯文本' }}
+      </span>
+    </div>
+    <Notice kind="error" :message="previewErr" />
+    <div v-if="previewLoading" class="muted preview-loading">正在生成预览…</div>
+    <template v-if="preview">
+      <h3 class="section-title">标题</h3>
+      <div class="preview-subject">{{ preview.subject }}</div>
+      <h3 class="section-title">正文</h3>
+      <div v-if="preview.format === 'html'" class="preview-body preview-html" v-html="preview.body"></div>
+      <pre v-else class="preview-body">{{ preview.body }}</pre>
+      <details class="preview-details">
+        <summary>实际发送内容（已隐藏目标地址与凭据）</summary>
+        <pre class="preview-payload">{{ preview.payload }}</pre>
+      </details>
+    </template>
   </div>
 
   <div class="card">

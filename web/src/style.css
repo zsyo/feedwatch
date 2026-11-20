@@ -349,6 +349,36 @@ button.small.is-active { background: var(--accent); border-color: var(--accent);
 .rule-list li + li { margin-top: .25rem; }
 .rule-list code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .8rem; }
 
+/* Channel form live preview: the visual sample plus the exact outgoing body. */
+.preview-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap; margin-bottom: .7rem;
+}
+.preview-kind { font-size: .8rem; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.preview-loading { font-size: .84rem; padding: .4rem 0; }
+.preview-subject {
+  background: #f8fafc; border: 1px solid var(--border); border-radius: 7px;
+  padding: .6rem .8rem; font-weight: 600; word-break: break-word;
+}
+.preview-body {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 7px;
+  padding: .9rem 1rem; margin: 0; font-size: .84rem; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word; max-height: 340px; overflow: auto;
+}
+.preview-html { font-family: inherit; white-space: normal; }
+.preview-html h2 { margin: 0 0 8px; font-size: 1.05rem; }
+.preview-html p { margin: 0 0 12px; }
+.preview-html table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.preview-html th, .preview-html td { border: 1px solid var(--border); padding: .35rem .5rem; text-align: left; }
+.preview-html a { color: var(--accent); }
+.preview-details { margin-top: .9rem; font-size: .84rem; }
+.preview-details summary { cursor: pointer; color: var(--muted); }
+.preview-payload {
+  background: #f8fafc; border: 1px solid var(--border); border-radius: 7px;
+  padding: .8rem; margin: .5rem 0 0; font-size: .78rem;
+  max-height: 320px; overflow: auto;
+}
+
 @media (max-width: 1100px) {
   .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
