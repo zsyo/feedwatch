@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { api, errorMessage } from '../api'
 import Notice from '../components/Notice.vue'
 import PageHeader from '../components/PageHeader.vue'
-import { saveNotifyMode, user } from '../session'
+import { saveBaselineOnSubscribe, saveNotifyMode, user } from '../session'
 import type { NotifyMode } from '../session'
 
 type Kind = 'text' | 'password' | 'select' | 'bool' | 'list' | 'textarea'
@@ -72,6 +72,13 @@ const mode = ref<NotifyMode>('digest')
 const modeBusy = ref(false)
 const modeErr = ref('')
 const modeOk = ref('')
+
+// Opting out keeps the user on update-only notifications: no snapshot is sent
+// when a subscription is created or re-enabled.
+const baselineOnSubscribe = ref(true)
+const baselineBusy = ref(false)
+const baselineErr = ref('')
+const baselineOk = ref('')
 
 // The preview is rendered by the server with the same templates and channel
 // adapters used for real delivery, so it cannot drift from what users get.
@@ -162,6 +169,7 @@ onMounted(async () => {
   // The account is loaded before the router lets this page render, so the saved
   // value is already available; the fallback only guards a direct reload race.
   mode.value = user.value?.notify_mode ?? 'digest'
+  baselineOnSubscribe.value = user.value?.baseline_on_subscribe ?? true
   await loadSchema()
   await load()
 })
@@ -177,6 +185,22 @@ async function saveMode(): Promise<void> {
     modeErr.value = errorMessage(e)
   } finally {
     modeBusy.value = false
+  }
+}
+
+async function saveBaseline(): Promise<void> {
+  baselineErr.value = ''
+  baselineOk.value = ''
+  baselineBusy.value = true
+  try {
+    baselineOnSubscribe.value = await saveBaselineOnSubscribe(baselineOnSubscribe.value)
+    baselineOk.value = baselineOnSubscribe.value
+      ? '已保存，之后订阅或重新启用订阅时会发送当前版本基线。'
+      : '已保存，之后只推送订阅更新，不再发送基线通知。'
+  } catch (e) {
+    baselineErr.value = errorMessage(e)
+  } finally {
+    baselineBusy.value = false
   }
 }
 
@@ -348,6 +372,24 @@ function summary(ch: Channel): string[] {
     </div>
     <Notice kind="error" :message="modeErr" />
     <Notice kind="success" :message="modeOk" />
+  </div>
+
+  <div class="card">
+    <h2>订阅基线通知</h2>
+    <p class="card-sub">
+      订阅成功或重新启用订阅时，立即发送一条当前版本快照，便于确认抓取已经开始。只想关注后续更新的用户可以关闭；关闭后仍会正常收到新版本通知，订阅从当前版本开始的水位线也不受影响。
+    </p>
+    <div class="choice-row">
+      <label class="inline-check">
+        <input v-model="baselineOnSubscribe" type="checkbox" />
+        <span>订阅后发送基线通知<span class="muted">：先收到当前版本，之后只推送更新</span></span>
+      </label>
+    </div>
+    <div class="form-actions">
+      <button class="primary" type="button" :disabled="baselineBusy" @click="saveBaseline">保存</button>
+    </div>
+    <Notice kind="error" :message="baselineErr" />
+    <Notice kind="success" :message="baselineOk" />
   </div>
 
   <div class="card">

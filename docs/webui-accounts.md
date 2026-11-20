@@ -31,13 +31,13 @@
 
 - 数据库与主密钥都在命名卷 `feedwatch-webui-data:/app/data`。SQLite WAL 需要**目录**可写，启动期有和 base 一样的 `CreateTemp` 预检；把卷换成 bind mount 时同样用 `.env` 里的 `FW_UID` / `FW_GID` 指定宿主机属主——**rootless Docker 例外**，此时容器的 uid 不是宿主 uid，要么保留命名卷，要么写 `user: "0:0"`，见 [rootless Docker 下的 uid 映射](docker.md#rootless-docker)。
 - **`secret.key` 与数据库必须一起备份、一起丢弃**。首启用 `O_CREATE|O_EXCL` 生成 32 字节（0600），做渠道密钥的信封加密：`fwsec:v1:` + `base64.RawURLEncoding(nonce ‖ ciphertext ‖ tag)`，AAD 绑定渠道 id，把密文复制到别的渠道行也解不开。读失败**绝不重新生成**（那会让已存凭据全部变成无法解密的垃圾），而是启动即报错并给出三条补救路径；长度或 base64 不合法同样直接拒绝。想自己托管就设 `FEEDWATCH_WEBUI_SECRET_KEY`（标准 base64 的 32 字节），它覆盖密钥文件，**设过之后不要再换**。
-- 每个用户订阅时都会立即收到一条**当前版本基线通知**（快照，列出该项目此刻的最新稳定版本）：新增订阅、删除后重新订阅、停用后重新启用都会各发一条。基线只查一次、优先用进程内缓存（全局轮询或其他用户订阅时已抓取的数据），未命中才走网络并受 `poll` 限速；它**不会补发历史版本**，也不推进 seen 状态。如果订阅时缓存里是旧数据，实际的新版本会在下一轮全局轮询时作为常规「新版本」通知送达。
+- 每个用户订阅时都会立即收到一条**当前版本基线通知**（快照，列出该项目此刻的最新稳定版本）：新增订阅、删除后重新订阅、停用后重新启用都会各发一条。基线只查一次、优先用进程内缓存（全局轮询或其他用户订阅时已抓取的数据），未命中才走网络并受 `poll` 限速；它**不会补发历史版本**，也不推进 seen 状态。如果订阅时缓存里是旧数据，实际的新版本会在下一轮全局轮询时作为常规「新版本」通知送达。不想收这条快照的用户可在「通知方式 → 订阅基线通知」关掉（`users.baseline_on_subscribe`，默认开）；关闭只跳过基线推送，不影响新版本通知与水位线复制。
 - **订阅中心里的目录只是模板**：`catalog_categories` / `catalog_entries` / `submissions` 三张表，`category_id IS NULL` 表示「未分类」。一键订阅把目录里的 URL 复制成用户自己的一份订阅，之后编辑、停用、删除目录**都不会影响已订阅用户**。停用只是从订阅中心隐藏，仍占用 `url_key`（全局唯一索引含停用行），要释放 URL 必须删除条目。
 - 用户提交的新增 / 更新申请先进 `submissions`（`pending`），**只有管理员通过才写 `catalog_entries`**；驳回必须填理由，撤回保留 `withdrawn` 历史。更新申请在提交时用 `before_json` 存下当时的原值快照，审核页与「我的提交」直接展示改前 / 改后对比。`submissions` 行永不物理删除，带 `reviewed_by` / `reviewed_at` / `reject_reason`。
 - 目录 URL 会**展示给所有普通用户并允许复制**，因此入口校验比普通订阅更严：只允许 http/https，拒绝 userinfo 与含 `token` / `secret` / `key` / `password` / `auth` / `sig` 等敏感 query 键，长度上限 2048；对外响应还会再脱敏一次。已驳回的 URL 可以重新提交（唯一索引只对 `pending` 生效），每人最多 10 条待审申请。
 - 「订阅管理 → 导入导出」只搬运目录元数据（分类按名称匹配，不含 id），冲突策略有 `skip`（默认）/ `overwrite` / `error`（遇重复整体回滚）；导入**只写目录表**，绝不写 `subscriptions` / `feed_pool` / `user_seen`，也不含渠道凭据与投递状态。删除分类时该分类下的条目与申请统一改为「未分类」（外键 `ON DELETE SET NULL`，同一事务完成）。
 - 「全局设置」页可改轮询间隔、超时、并发、抓取/发送间隔、HTTP 参数等；服务端逐项校验后写库，**重启进程后生效**（不热更新）。
-- `webui.cookie_secure` / `webui.session_ttl` 是环境变量控制的只读项；`notify.mode` 在 WebUI 里不再有全局行，它是**账号级**偏好（`users.notify_mode`），在「通知方式」页顶部设置，对所有订阅与所有渠道一起生效。
+- `webui.cookie_secure` / `webui.session_ttl` 是环境变量控制的只读项；`notify.mode` 在 WebUI 里不再有全局行，它是**账号级**偏好（`users.notify_mode`），在「通知方式」页顶部设置，对所有订阅与所有渠道一起生效。同页的「订阅基线通知」也是账号级开关（`users.baseline_on_subscribe`，默认开）。
 - 渠道表单由服务端下发：`GET /api/channel-fields` 返回每种渠道的字段表（键名、必填、类型、选项、是否密钥），前端按 schema 渲染。新增一种渠道只需改 `internal/webui/channelspec.go` 的 `ChannelFields`，页面不用动。表单下方的「通知内容预览」按当前类型与参数实时渲染一条示例订阅（golang/go），可切换「发现新版本 / 当前版本基线」；它复用真实投递的模板与渠道适配器（`POST /api/channels/preview`），只展示标题、正文和已隐藏地址/凭据的请求体，不发消息、不读密钥。
 - **显示时区跟着账号走**：默认「跟随服务器」（容器的 `TZ`，compose 默认 `Asia/Shanghai`），也可在「账号设置」里选任意 IANA 时区，存在 `users.timezone`，换设备登录自动同步。它只影响页面渲染：数据库里所有时间戳仍是 RFC3339 UTC，改时区不会重写任何数据。需要自己指定默认值就改 `.env` 的 `TZ`。
 - 页面里的时间统一渲染成 `YYYY-MM-DD HH:mm:ss`（不带 `T` / `Z`），按上面选中的时区换算；`GET /api/meta` 同时给出 `server_timezone` 与 `server_utc_offset`，未登录页面也能标出服务器默认值。WebUI 变体额外 `import _ "time/tzdata"`，因此精简镜像里没有 tzdata 也能解析 IANA 名称。

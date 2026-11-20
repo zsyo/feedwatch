@@ -11,6 +11,8 @@ export interface User {
   timezone: string
   /** How a cycle's new releases are grouped: one digest, or one per project. */
   notify_mode: NotifyMode
+  /** Whether subscribing immediately pushes a current-version snapshot. */
+  baseline_on_subscribe: boolean
   /** False for an account created by a third-party sign-in that never set one. */
   password_set: boolean
 }
@@ -108,4 +110,14 @@ export async function saveNotifyMode(mode: NotifyMode): Promise<NotifyMode> {
   const res = await api.patch<{ notify_mode: NotifyMode }>('/api/me', { notify_mode: mode })
   if (user.value) user.value = { ...user.value, notify_mode: res.notify_mode }
   return res.notify_mode
+}
+
+// saveBaselineOnSubscribe opts in or out of the snapshot sent right after a
+// subscription is created or re-enabled. Update notifications are unaffected.
+export async function saveBaselineOnSubscribe(enabled: boolean): Promise<boolean> {
+  const res = await api.patch<{ baseline_on_subscribe: boolean }>('/api/me', {
+    baseline_on_subscribe: enabled,
+  })
+  if (user.value) user.value = { ...user.value, baseline_on_subscribe: res.baseline_on_subscribe }
+  return res.baseline_on_subscribe
 }
