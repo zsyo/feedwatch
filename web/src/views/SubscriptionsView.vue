@@ -102,7 +102,7 @@ async function save(row: Subscription): Promise<void> {
 }
 
 async function remove(row: Subscription): Promise<void> {
-  if (!window.confirm(`确定删除订阅「${row.display_name || row.url}」？删除后重新订阅也不会补发历史版本。`)) return
+  if (!window.confirm(`确定删除订阅「${row.display_name || row.url}」？之后重新订阅会收到一条当前版本基线通知。`)) return
   err.value = ''
   success.value = ''
   try {
